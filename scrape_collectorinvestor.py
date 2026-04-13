@@ -13,8 +13,8 @@ from bs4 import BeautifulSoup
 
 
 DEFAULT_EVENT_URL = (
-    "https://bid.collectorinvestorauctions.com/Event/Details/4053663/"
-    "APRIL-SPORTS-NONSPORTS-AUCTION"
+    "https://bid.collectorinvestorauctions.com/Event/Details/3477273/"
+    "FEBRUARY-SPORTS-NONSPORTS-AUCTION"
 )
 DEFAULT_OUTPUT = "collectorinvestor_products_sample.json"
 

@@ -97,7 +97,6 @@ Analyze this sports card and generate the TOP 10-20 search tags that actual buye
 PRODUCT INFO:
 Title: {title}
 Description: {description}
-Image URL: {image_url}
 
 IMPORTANT RULES:
 1. Return ONLY a JSON array of tags. No explanations, no markdown.
@@ -112,17 +111,28 @@ Example output for a Shohei Ohtani card:
 
 Generate tags now:"""
 
+    # Build message content, including the image URL as an image payload if available
+    content = []
+    if image_url:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image_url,
+                    "detail": "high",
+                },
+            }
+        )
+
+    content.append({"type": "text", "text": prompt})
+
     try:
         response = client.chat.completions.create(
             model=deployment,
             messages=[
                 {
-                    "role": "system",
-                    "content": "You generate accurate search tags for sports trading cards based on buyer behavior.",
-                },
-                {
                     "role": "user",
-                    "content": prompt,
+                    "content": content,
                 },
             ],
             temperature=0.3,
