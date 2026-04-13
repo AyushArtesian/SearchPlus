@@ -1,14 +1,14 @@
-from typing import Optional
 from storage import load_products
 
 
 def search_products(query: str) -> dict:
     """
-    Search products by query across tags, name, and description.
+    Search products by query across tags, title/name, subtitle, and description.
     
     Scoring:
     - Tag match: 2 points
-    - Name match: 5 points
+    - Title/name match: 5 points
+    - Subtitle match: 2 points
     - Description match: 1 point
     
     Args:
@@ -29,9 +29,10 @@ def search_products(query: str) -> dict:
         score = 0
         matched_tags = []
         
-        # Get product fields
+        # Get product fields (support both old and new schemas)
         tags = product.get("tags", [])
-        name = product.get("name", "").lower()
+        title = (product.get("title") or product.get("name") or "").lower()
+        subtitle = (product.get("subtitle") or "").lower()
         description = product.get("description", "").lower()
         category = product.get("category", "").lower()
         
@@ -42,9 +43,13 @@ def search_products(query: str) -> dict:
                 score += 2
                 matched_tags.append(tag)
         
-        # Check name match (5 pts)
-        if query_lower in name:
+        # Check title/name match (5 pts)
+        if query_lower in title:
             score += 5
+
+        # Check subtitle match (2 pts)
+        if subtitle and query_lower in subtitle:
+            score += 2
         
         # Check description match (1 pt)
         if query_lower in description:
@@ -57,7 +62,8 @@ def search_products(query: str) -> dict:
         if score > 0:
             result = {
                 "id": product.get("id"),
-                "name": product.get("name"),
+                "title": product.get("title") or product.get("name"),
+                "subtitle": product.get("subtitle", ""),
                 "category": product.get("category"),
                 "description": product.get("description"),
                 "image_url": product.get("image_url"),

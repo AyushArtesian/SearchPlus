@@ -6,6 +6,7 @@ Send each product (title, description, image) to OpenAI and get 10-20 user-frien
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -73,46 +74,136 @@ def save_products(path: str, products: list[dict[str, Any]]) -> None:
         json.dump(products, f, indent=2, ensure_ascii=False)
 
 
-def generate_tags(client: OpenAI, deployment: str, product: dict[str, Any]) -> list[str]:
-    """
-    Generate 10-20 user-friendly search tags for a product.
-    
-    Args:
-        client: OpenAI client
-        deployment: Azure deployment name
-        product: Product dict with title, description, image_url
-    
-    Returns:
-        List of tags
-    """
-    title = product.get("title", "").strip()
-    description = product.get("description", "").strip()
-    image_url = product.get("image_url", "").strip()
-    
-    # Build the prompt
-    prompt = f"""You are an expert in sports cards and ecommerce search behavior.
+def _normalize_image_url(image_url: str, store_base_url: str = "") -> str:
+    image_url = (image_url or "").strip()
+    if not image_url:
+        return ""
 
-Analyze this sports card and generate the TOP 10-20 search tags that actual buyers use to find this card on ecommerce platforms.
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return image_url
 
-PRODUCT INFO:
-Title: {title}
-Description: {description}
+    if image_url.startswith("//"):
+        return f"https:{image_url}"
 
-IMPORTANT RULES:
-1. Return ONLY a JSON array of tags. No explanations, no markdown.
-2. Tags must be actual search queries buyers use (e.g., "shohei ohtani rc", "psa 10", "x-fractor")
-3. Include: player names, card set, year, grade, special features, variations, sport
-4. Keep tags lowercase and user-friendly (1-4 words each)
-5. No speculative or vague tags
-6. No auction site boilerplate
+    if not store_base_url:
+        return image_url
 
-Example output for a Shohei Ohtani card:
-["shohei ohtani", "ohtani rookie", "2018 topps chrome", "x-fractor", "psa 10", "gem mint", "rc card", "baseball"]
+    base = store_base_url.rstrip("/")
+    if image_url.startswith("/"):
+        return f"{base}{image_url}"
+    return f"{base}/{image_url}"
 
-Generate tags now:"""
 
-    # Build message content, including the image URL as an image payload if available
-    content = []
+def _extract_image_url(product: dict[str, Any], store_base_url: str = "") -> str:
+    image_candidate = (
+        product.get("image_url")
+        or product.get("image")
+        or product.get("thumbnail")
+        or ""
+    )
+    return _normalize_image_url(str(image_candidate), store_base_url)
+
+
+def _clean_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _normalize_tags(tags: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for tag in tags:
+        clean = _clean_text(tag).lower().strip(".,;:-")
+        if not clean:
+            continue
+        if clean in seen:
+            continue
+        seen.add(clean)
+        normalized.append(clean)
+    return normalized[:20]
+
+
+def _parse_tags_response(raw_response: str) -> list[str]:
+    raw_response = (raw_response or "").strip()
+    if not raw_response:
+        return []
+
+    try:
+        parsed = json.loads(raw_response)
+        if isinstance(parsed, list):
+            return _normalize_tags(parsed)
+        if isinstance(parsed, dict) and isinstance(parsed.get("tags"), list):
+            return _normalize_tags(parsed["tags"])
+    except json.JSONDecodeError:
+        pass
+
+    json_array_match = re.search(r"\[[\s\S]*\]", raw_response)
+    if json_array_match:
+        try:
+            parsed = json.loads(json_array_match.group(0))
+            if isinstance(parsed, list):
+                return _normalize_tags(parsed)
+        except json.JSONDecodeError:
+            pass
+
+    fallback_split = re.split(r"\n|,", raw_response)
+    return _normalize_tags(fallback_split)
+
+
+def generate_tags(
+    product: dict[str, Any],
+    store_base_url: str = "",
+    *,
+    client: OpenAI | None = None,
+    deployment: str | None = None,
+) -> list[str]:
+    """Generate user-search-friendly tags from product text and image."""
+    deployment_name = (deployment or os.getenv("AZURE_OPENAI_DEPLOYMENT", "")).strip()
+    if not deployment_name:
+        print("    Error: Missing AZURE_OPENAI_DEPLOYMENT")
+        return []
+
+    openai_client = client
+    if openai_client is None:
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+        api_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
+        if not endpoint or not api_key:
+            print("    Error: Missing Azure OpenAI endpoint or API key")
+            return []
+        if not endpoint.endswith("/"):
+            endpoint += "/"
+        openai_client = OpenAI(api_key=api_key, base_url=endpoint)
+
+    product_id = product.get("id", "")
+    title = _clean_text(product.get("title") or product.get("name"))
+    subtitle = _clean_text(product.get("subtitle"))
+    description = _clean_text(product.get("description"))
+    image_url = _extract_image_url(product, store_base_url)
+
+    payload_for_model: dict[str, Any] = {
+        "id": product_id,
+        "title": title,
+        "description": description,
+        "image_url": image_url,
+    }
+    if subtitle:
+        payload_for_model["subtitle"] = subtitle
+
+    prompt = (
+        "You are a sports-card ecommerce search expert. "
+        "Generate tags that real buyers type when searching for this exact card.\n\n"
+        "Input JSON:\n"
+        f"{json.dumps(payload_for_model, ensure_ascii=False, indent=2)}\n\n"
+        "Rules:\n"
+        "1) Return ONLY a JSON array of 12-20 lowercase tags.\n"
+        "2) Prioritize high-intent searchable phrases: player name, last name + rc, year + set, "
+        "card number, rookie terms, grader/grade (psa/bgs/sgc), parallel/insert/refractor terms, sport.\n"
+        "3) No generic filler (e.g. collectible, sports card lot) unless clearly present.\n"
+        "4) No duplicates, no hashtags, no punctuation-heavy tags.\n"
+        "5) If description is generic boilerplate, rely on title and image details.\n"
+        "6) Keep each tag concise (1-4 words)."
+    )
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     if image_url:
         content.append(
             {
@@ -124,35 +215,29 @@ Generate tags now:"""
             }
         )
 
-    content.append({"type": "text", "text": prompt})
+    def _request_tags(request_content: list[dict[str, Any]]) -> list[str]:
+        response = openai_client.chat.completions.create(
+            model=deployment_name,
+            messages=[{"role": "user", "content": request_content}],
+            temperature=0.2,
+            max_completion_tokens=320,
+        )
+
+        raw_response = (response.choices[0].message.content or "").strip()
+        return _parse_tags_response(raw_response)
 
     try:
-        response = client.chat.completions.create(
-            model=deployment,
-            messages=[
-                {
-                    "role": "user",
-                    "content": content,
-                },
-            ],
-            temperature=0.3,
-            max_completion_tokens=300,
-        )
-        
-        raw_response = response.choices[0].message.content.strip()
-        
-        # Parse JSON response
-        try:
-            tags = json.loads(raw_response)
-            if isinstance(tags, list):
-                tags = [str(t).strip().lower() for t in tags if t]
-                return tags[:20]  # Cap at 20 tags
-        except json.JSONDecodeError:
-            pass
-        
-        return []
-    
+        return _request_tags(content)
+
     except Exception as e:
+        if image_url:
+            try:
+                print("    Warning: image could not be used, retrying text-only...")
+                return _request_tags([{"type": "text", "text": prompt}])
+            except Exception as retry_error:
+                print(f"    Error: {retry_error}")
+                return []
+
         print(f"    Error: {e}")
         return []
 
@@ -198,7 +283,7 @@ def main():
         print(f"[{idx}/{len(products)}] Tagging {product_id}: {title}...")
         
         try:
-            tags = generate_tags(client, deployment, product)
+            tags = generate_tags(product, client=client, deployment=deployment)
             product["tags"] = tags
             if "tagging_error" in product:
                 del product["tagging_error"]
