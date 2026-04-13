@@ -188,15 +188,17 @@ pip install -r requirements.txt
 - `httpx` - Async HTTP client (fetch products from external APIs)
 - `python-dotenv` - Load environment variables from `.env`
 
-### Step 4: Configure OpenAI API Key
+### Step 4: Configure Azure OpenAI in `.env`
 Create a `.env` file in the project root:
 ```
-OPENAI_API_KEY=sk-YOUR_KEY_HERE
+AZURE_OPENAI_ENDPOINT=https://aworx-content-tag-02-resource.openai.azure.com/openai/v1/
+AZURE_OPENAI_DEPLOYMENT=gpt-5.4-nano
+AZURE_OPENAI_API_KEY=YOUR_KEY
 ```
 
-Get your API key at: https://platform.openai.com/api-keys
+Get your API key from Azure and use your deployment name for `AZURE_OPENAI_DEPLOYMENT`.
 
-**⚠️ Security Note:** Never commit `.env` to version control. OpenAI charges per request (~$0.01-0.05 per product with vision).
+**⚠️ Security Note:** Never commit `.env` to version control. Azure/OpenAI charges may apply for every tagging request.
 
 ### Step 5: Verify Installation
 ```bash
