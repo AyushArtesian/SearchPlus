@@ -1,44 +1,71 @@
 import argparse
-import os
-import json
-import requests
+import base64
 import hashlib
 import hmac
-import base64
+import html
+import json
+import re
 from datetime import datetime, UTC
+from pathlib import Path
 from urllib.parse import urlparse
-import certifi
 
-# Config
-username = "collectorinvestorapiuser"
-base64_token = "U4uRz/MrYA5O4lQNw/zHIlq7v5ez+Mv8ljw80oq3pVU="
-uri = "https://bid.collectorinvestorauctions.com/api/event/SearchListing"
+import requests
 
-content_type = "application/json"
+# API auth config
+USERNAME = "collectorinvestorapiuser"
+BASE64_TOKEN = "U4uRz/MrYA5O4lQNw/zHIlq7v5ez+Mv8ljw80oq3pVU="
+
+# Endpoint that returns listing data
+API_URI_TEMPLATE = "https://bid.collectorinvestorauctions.com/api/listing/search/{offset}/{limit}"
+CONTENT_TYPE = "application/json"
 
 
-def generate_headers(username, base64_token, uri, content_type):
-    # ✅ No body → MD5 of empty string
-    md5_bytes = hashlib.md5(b"").digest()
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Fetch CollectorInvestor listings and save OpenAI-ready JSON."
+    )
+    parser.add_argument("--offset", type=int, default=0, help="Listing offset (default: 0)")
+    parser.add_argument("--limit", type=int, default=25, help="Listing page size (default: 25)")
+    parser.add_argument(
+        "--output",
+        default="collectorinvestor_products_sample.json",
+        help="Output JSON path (default: collectorinvestor_products_sample.json)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=45,
+        help="HTTP timeout in seconds (default: 45)",
+    )
+    parser.add_argument(
+        "--status",
+        default="",
+        help="Optional listing status filter (e.g. Active, Draft)",
+    )
+    return parser.parse_args()
+
+
+def generate_headers(username: str, base64_token: str, uri: str, body: str, content_type: str) -> dict:
+    # API expects Content-MD5 and HMAC signature using request path.
+    md5_bytes = hashlib.md5(body.encode("utf-8")).digest()
     content_md5 = base64.b64encode(md5_bytes).decode("utf-8")
 
-    # ✅ RFC1123 Date (timezone aware)
     date = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S GMT")
-
-    # Request path lowercase
     request_path = urlparse(uri).path.lower()
 
-    # ✅ String to sign (GET request)
     string_to_sign = (
         "GET\n"
-        + content_md5 + "\n"
-        + content_type + "\n"
-        + date + "\n"
-        + username + "\n"
+        + content_md5
+        + "\n"
+        + content_type
+        + "\n"
+        + date
+        + "\n"
+        + username
+        + "\n"
         + request_path
     )
 
-    # HMAC SHA256 signature
     token_bytes = base64.b64decode(base64_token)
     signature = base64.b64encode(
         hmac.new(token_bytes, string_to_sign.encode("utf-8"), hashlib.sha256).digest()
@@ -52,131 +79,127 @@ def generate_headers(username, base64_token, uri, content_type):
     }
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="CollectorInvestor API tester")
-    parser.add_argument(
-        "--ca-bundle",
-        dest="ca_bundle",
-        help="Path to a custom CA bundle PEM file",
-    )
-    parser.add_argument(
-        "--insecure",
-        dest="insecure",
-        action="store_true",
-        help="Disable SSL verification for local testing",
-    )
-    return parser.parse_args()
+def strip_html(raw: str) -> str:
+    if not raw:
+        return ""
+    text = re.sub(r"<br\s*/?>", "\n", raw, flags=re.IGNORECASE)
+    text = re.sub(r"</p\s*>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    text = re.sub(r"\r\n?", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
-def get_verify_path(args):
-    # Use CLI arg first, then env var, then certifi default.
-    return args.ca_bundle or os.environ.get("COLLECTOR_INVESTOR_CA_BUNDLE") or certifi.where()
+def extract_best_image_url(media_items: list) -> str:
+    if not isinstance(media_items, list):
+        return ""
+
+    variation_priority = ["FullSize", "LargeSize", "ThumbFit", "ThumbCrop"]
+
+    for media in media_items:
+        variations = (media or {}).get("Variations", {})
+        if not isinstance(variations, dict):
+            continue
+
+        for name in variation_priority:
+            node = variations.get(name) or {}
+            asset = node.get("Asset") or {}
+            metadata = asset.get("MetaData") or {}
+            physical_uri = metadata.get("PhysicalURI")
+            if physical_uri:
+                return str(physical_uri).strip()
+
+    return ""
 
 
-def allow_insecure(args):
-    return args.insecure or os.environ.get("COLLECTOR_INVESTOR_INSECURE", "").strip().lower() in {"1", "true", "yes", "y"}
+def listing_to_product(
+    listing: dict,
+) -> dict:
+    listing_id = listing.get("ID")
+    title = (listing.get("Title") or "").strip()
+    subtitle = (listing.get("Subtitle") or "").strip()
+    description = strip_html(listing.get("Description") or "")
+
+    image_url = ""
+    if listing.get("ImageURI"):
+        image_url = str(listing.get("ImageURI")).strip()
+    if not image_url:
+        image_url = extract_best_image_url(listing.get("Media") or [])
+
+    product = {
+        "id": listing_id,
+        "title": title,
+        "description": description,
+        "image_url": image_url,
+    }
+    if subtitle:
+        product["subtitle"] = subtitle
+
+    return product
 
 
-def is_network_block(response):
-    if response.status_code != 403:
-        return False
-    body = response.text.lower()
-    return any(
-        marker in body
-        for marker in [
-            "blocked site",
-            "access restricted",
-            "sophos",
-            "fw.artesian.io",
-            "network administration",
-            "blocked by",
-        ]
-    )
+def parse_response_to_listings(payload):
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+
+    if isinstance(payload, dict):
+        for key in ["List", "list", "Items", "items", "Listings", "listings", "Data", "data"]:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+
+    return []
 
 
-def main(args):
-    base_uri = "https://bid.collectorinvestorauctions.com/api/event/SearchListing"
-    full_uri = base_uri
-    
-    try:
-        # Try with common query parameters first
-        params = {
-            "status": "active",
-            "limit": 50,
-            "offset": 0,
-        }
-        
-        # Build full URI with query string
-        query_string = "&".join(f"{k}={v}" for k, v in params.items())
-        full_uri = f"{base_uri}?{query_string}"
-        
-        headers = generate_headers(username, base64_token, base_uri, content_type)
+def main() -> None:
+    args = parse_args()
 
-        print("\n--- Sending Request ---\n")
-        print(f"Endpoint: {full_uri}")
-        print("Authorization:", headers["Authorization"])
-        print("Date:", headers["Date"])
-        print("Content-MD5:", headers["Content-MD5"])
+    uri = API_URI_TEMPLATE.format(offset=args.offset, limit=args.limit)
+    request_body = {"Items": {}}
+    body_str = json.dumps(request_body, separators=(",", ":"))
 
-        verify_path = get_verify_path(args)
-        print(f"Verify path: {verify_path}")
-        
-        response = requests.get(
-            full_uri,
-            headers=headers,
-            verify=verify_path,
-            timeout=30,
-        )
+    headers = generate_headers(USERNAME, BASE64_TOKEN, uri, body_str, CONTENT_TYPE)
 
-        print("\n--- Response ---\n")
-        print("Status:", response.status_code)
-        print("Headers:", dict(response.headers))
+    print("\n--- Sending Request ---\n")
+    print("Endpoint:", uri)
+    print("Date:", headers["Date"])
 
-        if is_network_block(response):
-            print("The request is being blocked by your network or web filter.")
-            print("This looks like a corporate firewall/proxy block, not an issue with the request signature.")
-            print("If you need access, allow the site through your network filter or try from an unrestricted network.")
-            return
+    response = requests.get(uri, headers=headers, data=body_str, timeout=args.timeout)
 
-        try:
-            data = response.json()
-            print(json.dumps(data, indent=2))
-        except:
-            print(response.text)
+    print("\n--- Response ---\n")
+    print("Status:", response.status_code)
 
-    except requests.exceptions.SSLError as e:
-        print("\n--- SSL Error ---\n")
-        print(str(e))
-        if allow_insecure(args):
-            print("\n-- INSECURE MODE ENABLED --")
-            print("Retrying with SSL verification disabled. Use only for local testing.")
-            insecure_response = requests.get(full_uri, headers=headers, verify=False)
-            print("\n--- Insecure Response ---\n")
-            print("Status:", insecure_response.status_code)
-            if is_network_block(insecure_response):
-                print("The request is still being blocked by your network or web filter.")
-                print("This is not a certificate issue; the corporate firewall/proxy is intercepting the request.")
-                return
-            try:
-                print(json.dumps(insecure_response.json(), indent=2))
-            except:
-                print(insecure_response.text)
-            return
+    if response.status_code != 200:
+        print(response.text)
+        raise SystemExit(1)
 
-        if args.ca_bundle or os.environ.get("COLLECTOR_INVESTOR_CA_BUNDLE"):
-            print("\nThe custom CA bundle path may be invalid or not contain the issuer chain.")
-        else:
-            print(
-                "\nThe remote server certificate chain appears broken or incomplete. "
-                "This is a server-side TLS issue, not a signing issue. "
-                "Ask the server operator to fix the certificate chain, or provide a valid CA bundle "
-                "with --ca-bundle or COLLECTOR_INVESTOR_CA_BUNDLE."
-            )
-        print("\nTemporary workaround: run with --insecure or set COLLECTOR_INVESTOR_INSECURE=1.")
-    except requests.RequestException as e:
-        print("\n--- Error ---\n")
-        print(str(e))
+    payload = response.json()
+    listings = parse_response_to_listings(payload)
+
+    if not listings:
+        print("No listings found in response.")
+        output_path = Path(args.output)
+        output_path.write_text("[]", encoding="utf-8")
+        print(f"Saved empty array to: {output_path}")
+        return
+
+    products = [listing_to_product(item) for item in listings]
+
+    # Keep only entries with at least an ID and title.
+    products = [p for p in products if p.get("id") and p.get("title")]
+
+    # Optional status filter.
+    if args.status:
+        wanted = args.status.strip().lower()
+        listings = [item for item in listings if str(item.get("Status", "")).lower() == wanted]
+        products = [listing_to_product(item) for item in listings]
+
+    output_path = Path(args.output)
+    output_path.write_text(json.dumps(products, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    print(f"Saved {len(products)} normalized products to: {output_path}")
 
 
 if __name__ == "__main__":
-    main(parse_args())
+    main()

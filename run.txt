@@ -1,0 +1,5 @@
+python CollectorInvestor.py --offset 0 --limit 25 --output collectorinvestor_products_sample.json
+
+
+python tagger.py --input collectorinvestor_products_sample.json --output collectorinvestor_products_tagged.json
+
