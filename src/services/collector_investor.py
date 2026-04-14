@@ -70,7 +70,7 @@ def strip_html(raw: str) -> str:
 
 
 def extract_best_image_url(media_items: list) -> str:
-    """Extract the best quality image URL from media items."""
+    """Extract the best quality image URL from a single media item's variations."""
     if not isinstance(media_items, list):
         return ""
 
@@ -80,7 +80,6 @@ def extract_best_image_url(media_items: list) -> str:
         variations = (media or {}).get("Variations", {})
         if not isinstance(variations, dict):
             continue
-
         for name in variation_priority:
             node = variations.get(name) or {}
             asset = node.get("Asset") or {}
@@ -92,24 +91,125 @@ def extract_best_image_url(media_items: list) -> str:
     return ""
 
 
+def extract_all_image_urls(listing: dict) -> list[str]:
+    """
+    Extract ALL unique image URLs from a listing, in quality order.
+
+    Handles both response shapes:
+      Shape A (new API): listing["images"] is already a list of URL strings
+                         e.g. ["https://...fullsize.jpg", "https://...fullsize.jpg"]
+      Shape B (old API): listing["Media"] is a list of media objects with Variations
+                         e.g. [{"Variations": {"FullSize": {"Asset": {...}}}}]
+
+    Returns up to MAX_IMAGES deduplicated absolute URLs.
+    """
+    MAX_IMAGES = 4   # analyse at most 4 images per listing — more = diminishing returns
+    seen: set[str] = set()
+    urls: list[str] = []
+
+    def _add(url: str) -> None:
+        url = (url or "").strip()
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+
+    # ── Shape A: listing["images"] list of URL strings ───────────────────────
+    images_field = listing.get("images") or listing.get("Images")
+    if isinstance(images_field, list):
+        for item in images_field:
+            if isinstance(item, str) and item.strip():
+                _add(item.strip())
+
+    # ── Shape B: listing["Media"] list of media objects ──────────────────────
+    media_field = listing.get("Media") or listing.get("media")
+    if isinstance(media_field, list):
+        variation_priority = ["FullSize", "LargeSize", "ThumbFit", "ThumbCrop"]
+        for media in media_field:
+            variations = (media or {}).get("Variations", {})
+            if not isinstance(variations, dict):
+                continue
+            for name in variation_priority:
+                node = variations.get(name) or {}
+                asset = node.get("Asset") or {}
+                metadata = asset.get("MetaData") or {}
+                physical_uri = metadata.get("PhysicalURI")
+                if physical_uri:
+                    _add(str(physical_uri).strip())
+                    break  # take only best variation per media item
+
+    # ── Legacy single-image fallback ─────────────────────────────────────────
+    single = (listing.get("ImageURI") or listing.get("image_url") or "").strip()
+    if single:
+        _add(single)
+
+    return urls[:MAX_IMAGES]
+
+
+def normalize_category(listing: dict) -> dict[str, str]:
+    """
+    Extract and normalize the category block from a listing.
+
+    Handles both response shapes:
+      Shape A (new API): listing["category"] is a dict with lowercase keys
+                         e.g. {"main": "Sports Cards", "sport": "Basketball", "era": "...", "type": "Raw", "format": "Single"}
+      Shape B (old API): category fields may be top-level keys (Sport, Era, Type)
+    """
+    cat: dict[str, str] = {}
+
+    # Shape A — nested category dict
+    category_field = listing.get("category") or listing.get("Category")
+    if isinstance(category_field, dict):
+        for dest, sources in {
+            "sport":  ["sport",  "Sport"],
+            "era":    ["era",    "Era"],
+            "type":   ["type",   "Type"],       # "Raw" / "Graded"
+            "format": ["format", "Format"],     # "Single" / "Lot"
+            "main":   ["main",   "Main"],
+        }.items():
+            for src in sources:
+                val = category_field.get(src)
+                if val and str(val).strip():
+                    cat[dest] = str(val).strip()
+                    break
+
+    # Shape B — top-level fallback keys
+    for dest, key in [("sport", "Sport"), ("era", "Era"), ("type", "Type"), ("format", "Format")]:
+        if dest not in cat:
+            val = listing.get(key)
+            if val and str(val).strip():
+                cat[dest] = str(val).strip()
+
+    return cat
+
+
 def listing_to_product(listing: dict) -> dict:
-    """Transform a raw listing into a normalized product object."""
-    listing_id = listing.get("ID")
-    title = (listing.get("Title") or "").strip()
-    subtitle = (listing.get("Subtitle") or "").strip()
-    description = strip_html(listing.get("Description") or "")
+    """
+    Transform a raw listing into a normalized product object.
 
-    image_url = ""
-    if listing.get("ImageURI"):
-        image_url = str(listing.get("ImageURI")).strip()
-    if not image_url:
-        image_url = extract_best_image_url(listing.get("Media") or [])
+    New fields added vs original:
+      - image_urls (list[str]):  ALL images, not just the first one
+      - image_url  (str):        First/best image, kept for backward compatibility
+      - category   (dict):       Structured category data (sport, era, type, format)
+    """
+    listing_id  = listing.get("id") or listing.get("ID")
+    title       = (listing.get("title") or listing.get("Title") or "").strip()
+    subtitle    = (listing.get("subtitle") or listing.get("Subtitle") or "").strip()
+    description = strip_html(listing.get("description") or listing.get("Description") or "")
 
-    product = {
-        "id": listing_id,
-        "title": title,
+    # All images (multi-image support)
+    image_urls = extract_all_image_urls(listing)
+    primary_image_url = image_urls[0] if image_urls else ""
+
+    # Category metadata
+    category = normalize_category(listing)
+
+    product: dict[str, Any] = {
+        "id":          listing_id,
+        "title":       title,
         "description": description,
-        "image_url": image_url,
+        "image_url":   primary_image_url,    # backward-compat single URL
+        "image_urls":  image_urls,           # all images for multi-image OCR
+        "category":    category,             # sport, era, type, format
     }
     if subtitle:
         product["subtitle"] = subtitle
@@ -162,7 +262,10 @@ def fetch_products(
 
     if status.strip():
         wanted = status.strip().lower()
-        listings = [item for item in listings if str(item.get("Status", "")).lower() == wanted]
+        listings = [
+            item for item in listings
+            if str(item.get("Status") or item.get("status") or "").lower() == wanted
+        ]
 
     products = [listing_to_product(item) for item in listings]
     return [p for p in products if p.get("id") and p.get("title")]
