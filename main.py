@@ -1,67 +1,13 @@
-import json
+"""FastAPI application and pipeline orchestration."""
 
-import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
-from CollectorInvestor import (
-    API_URI_TEMPLATE,
-    BASE64_TOKEN,
-    CONTENT_TYPE,
-    USERNAME,
-    generate_headers,
-    listing_to_product,
-    parse_response_to_listings,
-)
-from tagger import generate_tags
-from search import search_products
-from storage import load_products, add_or_update_product, get_product_count
-
-
-# Request/Response models
-class PipelineRunRequest(BaseModel):
-    offset: int = 0
-    limit: int = 25
-    timeout: int = 45
-    status: str = ""
-
-
-class PipelineRunResponse(BaseModel):
-    success: bool
-    fetched: int
-    products_tagged: int
-    total_tags: int
-
-
-def fetch_collectorinvestor_products(
-    offset: int,
-    limit: int,
-    timeout: int,
-    status: str,
-) -> list[dict]:
-    """Fetch and normalize products from CollectorInvestor endpoint."""
-    uri = API_URI_TEMPLATE.format(offset=offset, limit=limit)
-    request_body = {"Items": {}}
-    body_str = json.dumps(request_body, separators=(",", ":"))
-
-    headers = generate_headers(USERNAME, BASE64_TOKEN, uri, body_str, CONTENT_TYPE)
-    response = requests.get(uri, headers=headers, data=body_str, timeout=timeout)
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"CollectorInvestor fetch failed (status {response.status_code}): {response.text[:300]}"
-        )
-
-    payload = response.json()
-    listings = parse_response_to_listings(payload)
-
-    if status.strip():
-        wanted = status.strip().lower()
-        listings = [item for item in listings if str(item.get("Status", "")).lower() == wanted]
-
-    products = [listing_to_product(item) for item in listings]
-    return [p for p in products if p.get("id") and p.get("title")]
+from src.models import PipelineRunRequest, PipelineRunResponse
+from src.services.collector_investor import fetch_products
+from src.services.tagger_service import generate_tags
+from src.services.search_service import search_products
+from src.storage import load_products, add_or_update_product, get_product_count
 
 
 app = FastAPI(title="Sports Card Tagger", version="1.0.0")
@@ -85,10 +31,10 @@ def health_check():
 @app.post("/pipeline/run")
 async def run_pipeline(request: PipelineRunRequest) -> PipelineRunResponse:
     """
-    Fetch products from CollectorInvestor, generate tags with GPT, save to products.json.
+    Fetch products from CollectorInvestor, generate tags with OpenAI, save to database.
     """
     try:
-        products = fetch_collectorinvestor_products(
+        products = fetch_products(
             offset=request.offset,
             limit=request.limit,
             timeout=request.timeout,
@@ -146,21 +92,21 @@ def search_endpoint(q: str = Query(..., description="Search query")) -> dict:
     - Subtitle match: 2 points
     - Description match: 1 point
 
-    Query example: /search?q=fast+bowler
+    Query example: /search?q=patrick+ewing
     """
     return search_products(q)
 
 
 @app.get("/products")
 def get_all_products() -> list[dict]:
-    """Get all products with their tags from products.json."""
+    """Get all products with their tags from database."""
     return load_products()
 
 
 @app.get("/products/{product_id}/tags")
 def get_product_tags(product_id: int) -> dict:
     """Get tags for a single product by ID."""
-    from storage import get_product_by_id
+    from src.storage import get_product_by_id
 
     product = get_product_by_id(product_id)
     if not product:
@@ -176,7 +122,7 @@ def get_product_tags(product_id: int) -> dict:
 @app.get("/products/{product_id}")
 def get_product(product_id: int) -> dict:
     """Get full product details by ID."""
-    from storage import get_product_by_id
+    from src.storage import get_product_by_id
 
     product = get_product_by_id(product_id)
     if not product:
@@ -187,5 +133,6 @@ def get_product(product_id: int) -> dict:
 
 if __name__ == "__main__":
     import uvicorn
+    from src.config import API_HOST, API_PORT, API_RELOAD
 
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host=API_HOST, port=API_PORT, reload=API_RELOAD)

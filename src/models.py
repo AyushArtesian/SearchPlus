@@ -1,0 +1,47 @@
+"""Data models for request/response validation."""
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+
+class PipelineRunRequest(BaseModel):
+    """Request model for the pipeline/run endpoint."""
+    offset: int = Field(0, description="Listing offset (default: 0)")
+    limit: int = Field(25, description="Listing page size (default: 25)")
+    timeout: int = Field(45, description="HTTP timeout in seconds")
+    status: str = Field("", description="Optional listing status filter")
+
+
+class PipelineRunResponse(BaseModel):
+    """Response model for the pipeline/run endpoint."""
+    success: bool = Field(..., description="Whether the pipeline succeeded")
+    fetched: int = Field(..., description="Number of products fetched")
+    products_tagged: int = Field(..., description="Number of products tagged")
+    total_tags: int = Field(..., description="Total tags generated")
+
+
+class ProductSearchResult(BaseModel):
+    """Individual search result for a product."""
+    id: int
+    title: str
+    subtitle: Optional[str] = ""
+    category: Optional[str] = ""
+    description: Optional[str] = ""
+    image_url: Optional[str] = ""
+    tags: list[str] = Field(default_factory=list)
+    matched_tags: list[str] = Field(default_factory=list)
+    score: int
+
+
+class SearchResponse(BaseModel):
+    """Response model for search endpoint."""
+    query: str
+    total: int
+    results: list[ProductSearchResult] = Field(default_factory=list)
+
+
+class ProductTagResponse(BaseModel):
+    """Response model for /products/{id}/tags endpoint."""
+    id: int
+    title: str
+    tags: list[str] = Field(default_factory=list)
