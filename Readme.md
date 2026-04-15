@@ -1493,10 +1493,10 @@ product["category"] = {
 
 ## 📄 License
 
-This project is proprietary to Artesian Automation.
+This project is proprietary to Artesian Software Technologies.
 
 ---
 
-**Last Updated:** 2025-01-15  
+**Last Updated:** 2026-04-15  
 **Version:** 2.0 (Three-Pass OCR Pipeline)  
-**Maintainer:** Artesian Automation Team
+**Maintainer:** Ayush Mittal
