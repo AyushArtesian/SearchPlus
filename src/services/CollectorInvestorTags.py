@@ -108,17 +108,21 @@ def send_tags_for_product(product):
         }
 
 
-def send_all_tags(from_storage=True):
+def send_all_tags(from_storage=True, products_to_post=None):
     """
-    Load all products and send their tags to the API.
+    Send product tags to the API.
     
     Args:
         from_storage: If True, load from database storage (default). If False, load from products.json
+        products_to_post: Optional list of products to post. If provided, overrides from_storage parameter
     
     Returns:
         List of result dictionaries for each product
     """
-    if from_storage:
+    if products_to_post is not None:
+        # Use provided products list (e.g., from pipeline run)
+        products = products_to_post
+    elif from_storage:
         try:
             from src.storage import load_products as load_from_storage
             products = load_from_storage()

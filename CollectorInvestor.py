@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional listing status filter (e.g. Active, Draft)",
     )
+    parser.add_argument(
+        "--event-id",
+        default="",
+        help="Optional CollectorInvestor Event ID (e.g. 4053663)",
+    )
     return parser.parse_args()
 
 
@@ -156,6 +161,11 @@ def main() -> None:
     args = parse_args()
 
     uri = API_URI_TEMPLATE.format(offset=args.offset, limit=args.limit)
+    
+    # Add EventID query parameter if provided
+    if args.event_id and args.event_id.strip():
+        uri = f"{uri}?EventID={args.event_id.strip()}"
+    
     request_body = {"Items": {}}
     body_str = json.dumps(request_body, separators=(",", ":"))
 

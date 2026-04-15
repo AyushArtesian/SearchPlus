@@ -10,6 +10,7 @@ class PipelineRunRequest(BaseModel):
     limit: int = Field(25, description="Listing page size (default: 25)")
     timeout: int = Field(45, description="HTTP timeout in seconds")
     status: str = Field("", description="Optional listing status filter")
+    event_id: str = Field("", description="Optional CollectorInvestor Event ID")
 
 
 class PipelineRunResponse(BaseModel):

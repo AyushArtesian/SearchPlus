@@ -236,9 +236,15 @@ def fetch_products(
     limit: int = 25,
     timeout: int = 45,
     status: str = "",
+    event_id: str = "",
 ) -> list[dict]:
     """Fetch and normalize products from CollectorInvestor API."""
     uri = COLLECTOR_INVESTOR_API_URI_TEMPLATE.format(offset=offset, limit=limit)
+    
+    # Add EventID query parameter if provided
+    if event_id and event_id.strip():
+        uri = f"{uri}?EventID={event_id.strip()}"
+    
     request_body = {"Items": {}}
     body_str = json.dumps(request_body, separators=(",", ":"))
 

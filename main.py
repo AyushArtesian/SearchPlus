@@ -41,6 +41,7 @@ async def run_pipeline(request: PipelineRunRequest) -> PipelineRunResponse:
             limit=request.limit,
             timeout=request.timeout,
             status=request.status,
+            event_id=request.event_id,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
@@ -82,10 +83,10 @@ async def run_pipeline(request: PipelineRunRequest) -> PipelineRunResponse:
 
     print(f"Pipeline complete. Tagged {len(products)} products ({total_tags} total tags)")
 
-    # Post all tags to Collector Investor API
+    # Post only newly tagged products to Collector Investor API
     print("\nPosting tags to Collector Investor API...")
     try:
-        post_results = send_all_tags(from_storage=True)
+        post_results = send_all_tags(products_to_post=products)
         tags_posted = sum(1 for r in post_results if r.get("success"))
         tags_posted_failed = sum(1 for r in post_results if not r.get("success"))
         print(f"Tags posted: {tags_posted} successful, {tags_posted_failed} failed")
