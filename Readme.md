@@ -1,23 +1,27 @@
 ﻿# Sports Card Tagger - Complete Documentation
 
-A production-ready Python project that fetches CollectorInvestor auction listings, enriches them with AI-generated buyer-search tags using a three-pass pipeline combining OCR and structured text analysis, and exposes a searchable REST API.
+A production-ready Python project that:
+- Fetches CollectorInvestor auction listings by event
+- AI-enriches them with buyer-search tags (40-50 per product)
+- **Automatically posts tags back to Collector Investor API**
+- Exposes a searchable REST API
+
+Complete end-to-end automation: **Fetch → Tag → Post → Search** in a single pipeline run.
 
 ## 📋 Table of Contents
 
 1. [Quick Start](#quick-start)
 2. [Project Overview](#project-overview)
-3. [Three-Pass Pipeline Architecture](#three-pass-pipeline-architecture)
+3. [Complete Workflow](#complete-workflow)
 4. [Directory Structure](#directory-structure)
 5. [Installation & Setup](#installation--setup)
 6. [Configuration](#configuration)
-7. [Data Models](#data-models)
-8. [Workflows](#workflows)
-9. [API Reference](#api-reference)
-10. [Advanced: Three-Pass Pipeline Details](#advanced-three-pass-pipeline-details)
-11. [Search Algorithm](#search-algorithm)
-12. [Examples](#examples)
-13. [Troubleshooting](#troubleshooting)
-14. [Best Practices](#best-practices)
+7. [API Reference](#api-reference)
+8. [CLI Usage](#cli-usage)
+9. [Examples](#examples)
+10. [Architecture](#architecture)
+11. [Tag Posting System](#tag-posting-system)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -34,10 +38,24 @@ cp .env.example .env
 # 3. Run API server
 uvicorn main:app --reload --port 8000
 
-# 4. Fetch & tag products in one command
+# 4. Complete pipeline: Fetch → Tag → Post (all in one command!)
 curl -X POST http://localhost:8000/pipeline/run \
   -H "Content-Type: application/json" \
-  -d '{"offset": 0, "limit": 25}'
+  -d '{
+    "offset": 0,
+    "limit": 25,
+    "event_id": "4053663"
+  }'
+
+# Response includes both tagging AND tag-posting results:
+# {
+#   "success": true,
+#   "fetched": 25,
+#   "products_tagged": 25,
+#   "total_tags": 1250,
+#   "tags_posted": 25,
+#   "tags_posted_failed": 0
+# }
 
 # 5. Search for cards
 curl "http://localhost:8000/search?q=patrick%20ewing"
@@ -47,32 +65,111 @@ curl "http://localhost:8000/search?q=patrick%20ewing"
 
 ## 🎯 Project Overview
 
-**Sports Card Tagger** is an AI-powered product enrichment system that automates the discovery and tagging of sports collectibles. It combines:
+**Sports Card Tagger** is an **end-to-end AI-powered product enrichment system** that automates discovery, tagging, AND posting of sports collectibles. It combines:
 
-- **Image Recognition**: OCR on card photos to extract text (player name, year, card number, etc.)
-- **Text Analysis**: Structured extraction from listing titles, descriptions, and metadata
-- **Intelligent Merging**: Combines visual + textual facts with source attribution
-- **Smart Tagging**: Generates 40-50 buyer-search tags based on merged data
+- **API Fetching**: Retrieves listings from Collector Investor API (with RWX_SECURE authentication)
+- **Image Recognition**: OCR on card photos to extract text (player, year, card number, etc.)
+- **Text Analysis**: Structured extraction from titles, descriptions, and metadata
+- **Intelligent Merging**: Combines visual + textual data with smart conflict resolution
+- **Tag Generation**: Creates 40-50 buyer-search tags based on verified facts
+- **Automated Posting**: Sends generated tags back to Collector Investor API
+- **Full-Text Search**: REST API for searching products by tags, title, description
 
 ### Key Features
 
-✅ **Multi-Image OCR** — Processes up to 4 images per product (front, back, slab, etc.)  
-✅ **Intelligent Fact Merging** — Combines OCR + text with smart strategies (scalar/boolean/list)  
-✅ **Deterministic Pipeline** — All OCR & fact extraction uses `temperature=0` for repeatability  
-✅ **Source Attribution** — Tags include `_source` fields (image/text/image+text)  
-✅ **Fallback Resilience** — Text-only retry if images fail  
-✅ **Fast REST API** — Built with FastAPI; Swagger docs auto-generated  
+✅ **Event-Based Fetching** — Download listings by EventID from Collector Investor  
+✅ **RWX_SECURE Authentication** — Built-in HMAC-SHA256 request signing  
+✅ **Multi-Image OCR** — Processes up to 4 images per product  
+✅ **Smart Fact Merging** — Combines OCR + text with intelligent conflict resolution  
+✅ **AI Tag Generation** — Creates 40-50 contextual buyer-search tags  
+✅ **Automatic Posting** — Posts tags directly to Collector Investor API  
+✅ **Progress Tracking** — Only posts tags for newly generated products (no duplicates)  
+✅ **REST API** — FastAPI with auto-generated Swagger docs  
 ✅ **Local Persistence** — JSON database (no external DB required)  
-✅ **Modular Architecture** — Clean separation: fetch → normalize → tag → store → search  
+✅ **Modular Architecture** — Clean separation: fetch → normalize → tag → store → post → search  
 
-### Use Case
+### Complete Workflow
 
-Improve search discoverability on sports card auction sites by automatically extracting tags such as:
-- Player names & positions (e.g., "patrick ewing", "power forward")
-- Card details from image (e.g., "1986 fleer", "rookie card", "rc")
-- Grading info (e.g., "psa 10", "gem mint")
-- Card features (e.g., "signed", "patch", "error card")
-- Multi-image cards that show front + back + slab
+```
+CollectorInvestor → Fetch Listings → Tag Products → Post Tags Back
+                                          ↓
+                                    Store in DB
+                                          ↓
+                                   Available for
+                                    Search API
+```
+
+---
+
+## 🔄 Complete Workflow
+
+### Step-by-Step Pipeline
+
+**1. Fetch Listings (API)**
+```
+GET /api/listing/search/{offset}/{limit}?EventID={event_id}
+```
+- Authenticates with RWX_SECURE headers
+- Fetches new/updated listings from specific event
+- Normalizes response to standard product format
+
+**2. Generate Tags (AI)**
+- **Pass 1**: OCR on card images (extract text from photos)
+- **Pass 2**: Extract facts from title, description, metadata
+- **Pass 3**: Merge OCR + text data intelligently
+- **Pass 4**: Generate 40-50 contextual buyer-search tags
+
+**3. Store in DB**
+- Saves products with generated tags to `data/products.json`
+- Accumulates products over multiple runs
+- Each product stored once with tags
+
+**4. Post Tags to API (NEW!)**
+- Transforms product tags to Collector Investor format: `{"Items": {"ListingID": "123", "Tags": "tag1, tag2, ..."}}`
+- POSTs to: `https://bid.collectorinvestorauctions.com/api/listing/createtags`
+- **Only posts newly generated tags** (from current pipeline run)
+- **Not re-posting old tags** from previous runs
+
+**5. Search & Discover**
+- Users can search products by tags, title, description
+- Weighted relevance scoring
+
+### Data Flow Example
+
+```json
+INPUT (from Collector Investor API):
+{
+  "id": 4607163,
+  "title": "2025 Topps Chrome Kon Knueppel RC Fanatical Photo Variation SSP",
+  "description": "You will receive the exact item(s) pictured. Happy bidding!",
+  "image_url": "https://ciaimages.blob.core.windows.net/..."
+}
+
+AFTER TAGGING:
+{
+  "id": 4607163,
+  "title": "2025 Topps Chrome Kon Knueppel RC Fanatical Photo Variation SSP",
+  "tags": [
+    "kon knueppel",
+    "2025 topps chrome",
+    "rookie card",
+    "rc",
+    "photo variation",
+    "ssp",
+    "charlotte hornets",
+    "nba",
+    ... (40-50 total)
+  ]
+}
+
+POSTED TO API AS:
+{
+  "Items": {
+    "ListingID": "4607163",
+    "Tags": "kon knueppel, 2025 topps chrome, rookie card, rc, ..."
+  }
+}
+```
 
 ---
 
@@ -167,36 +264,36 @@ The tagger uses a deterministic three-pass approach to maximize data quality:
 sports-card-tagger/
 ├── src/
 │   ├── __init__.py
-│   ├── config.py                    # Centralized configuration
-│   ├── models.py                    # Pydantic request/response models
-│   ├── storage.py                   # JSON database layer
+│   ├── config.py                      # Centralized configuration
+│   ├── models.py                      # Pydantic request/response models
+│   ├── storage.py                     # JSON database layer
 │   └── services/
 │       ├── __init__.py
-│       ├── collector_investor.py    # CollectorInvestor API client
-│       ├── tagger_service.py        # OpenAI three-pass tag generation
-│       └── search_service.py        # Full-text search engine
-├── data/                            # Generated locally (not committed)
-│   └── products.json                # Product database with tags
-├── main.py                          # FastAPI application (entry point)
-├── tagger.py                        # Legacy CLI for tag generation
-├── CollectorInvestor.py             # Legacy CLI for fetching
-├── requirements.txt                 # Python dependencies
-├── .env                             # Environment variables (local, not committed)
-├── .env.example                     # Example env template
-├── .gitignore                       # Git ignore rules
-└── Readme.md                        # This file
+│       ├── collector_investor.py      # CollectorInvestor API fetch client
+│       ├── CollectorInvestorTags.py   # CollectorInvestor API tag posting client
+│       ├── tagger_service.py          # OpenAI tag generation engine
+│       └── search_service.py          # Full-text search implementation
+├── data/                              # Generated locally (not committed)
+│   └── products.json                  # Product database with tags
+├── main.py                            # FastAPI application (main entry point)
+├── app.py                             # Alternative entry point
+├── CollectorInvestor.py               # Standalone CLI for fetching
+├── requirements.txt                   # Python dependencies
+├── .env                               # Environment variables (local, not committed)
+├── .env.example                       # Example env template
+├── .gitignore                         # Git ignore rules
+└── Readme.md                          # This file
 ```
 
-### Key Files
+### Key Services
 
 | File | Purpose |
 |------|---------|
-| `src/config.py` | All constants: OCR settings, Azure credentials, tag limits, temperature |
-| `src/services/collector_investor.py` | Endpoint-only fetching (no web scraping) |
-| `src/services/tagger_service.py` | Three-pass pipeline: OCR → text → merge → tags |
-| `src/services/search_service.py` | Weighted relevance search (tag, title, subtitle, description, category) |
-| `main.py` | FastAPI routes: /pipeline/run, /search, /products, health check |
-| `src/storage.py` | JSON load/save/query interface |
+| `src/services/collector_investor.py` | Fetches listings from Collector Investor API with RWX_SECURE auth |
+| `src/services/CollectorInvestorTags.py` | Posts generated tags to Collector Investor API |
+| `src/services/tagger_service.py` | OpenAI-powered tag generation (4-pass pipeline) |
+| `src/services/search_service.py` | Full-text search with weighted relevance scoring |
+| `main.py` | FastAPI routes: /pipeline/run, /search, /products, /tags/post-all |
 
 ---
 
@@ -301,62 +398,66 @@ from src.config import (
 
 ## 🔄 Workflows
 
-### Workflow 1: API Pipeline (Recommended)
+### Workflow 1: Complete Pipeline (Recommended)
 
-**Best for:** Continuous production fetching; real-time tagging; multiple users
+**Best for:** Production; end-to-end automation; single command does everything
 
-**Steps:**
+**Complete workflow in one API call:**
 
-1. **Start the API server:**
-   ```bash
-   uvicorn main:app --reload --port 8000
-   ```
+```bash
+# Fetch → Tag → Save → Post Tags (all-in-one!)
+curl -X POST http://localhost:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "offset": 0,
+    "limit": 25,
+    "timeout": 45,
+    "event_id": "4053663",
+    "status": ""
+  }'
+```
 
-2. **Fetch & tag in one command:**
-   ```bash
-   curl -X POST http://localhost:8000/pipeline/run \
-     -H "Content-Type: application/json" \
-     -d '{
-       "offset": 0,
-       "limit": 50,
-       "timeout": 45,
-       "status": ""
-     }'
-   ```
+**Response includes tagging AND posting results:**
+```json
+{
+  "success": true,
+  "fetched": 25,
+  "products_tagged": 25,
+  "total_tags": 1250,
+  "tags_posted": 25,
+  "tags_posted_failed": 0
+}
+```
 
-3. **Response:**
-   ```json
-   {
-     "success": true,
-     "fetched": 50,
-     "products_tagged": 50,
-     "total_tags": 2000
-   }
-   ```
+**What happens internally:**
+1. ✅ Fetches 25 new listings from event 4053663
+2. ✅ Generates 40-50 tags for each (AI-powered)
+3. ✅ Saves to database (`data/products.json`)
+4. ✅ Posts tags to Collector Investor API
+5. ✅ Only 25 newly-tagged products are posted (not 100 old ones!)
 
-4. **Check results:**
-   ```bash
-   # Get all products
-   curl http://localhost:8000/products
-
-   # Search
-   curl "http://localhost:8000/search?q=patrick%20ewing"
-
-   # Get single product with tags
-   curl http://localhost:8000/products/4453442/tags
-   ```
+**Search the tagged products:**
+```bash
+curl "http://localhost:8000/search?q=patrick%20ewing"
+```
 
 **Benefits:**
-- All steps in one HTTP call
-- Automatic retry on image failures
-- Swagger docs at `/docs`
-- Horizontally scalable
+- Single command does everything
+- Only posts NEW tags (no duplicates)
+- Automatic retry on failures
+- Full result tracking
+- Scalable to thousands of products
+
+**Key Parameter: `event_id`**
+- Filter by Collector Investor Event ID
+- Example: `"4053663"` fetches only listings from that event
+- Optional: leave empty to fetch all listings
 
 ---
 
-### Workflow 2: Manual CLI (Batch Mode)
+### Workflow 2: Manual CLI (Batch/Development)
 
-**Best for:** Development; debugging; one-off tagging batches
+**Best for:** Development; debugging; one-off batches
 
 **Step 1: Fetch listings**
 
@@ -364,90 +465,57 @@ from src.config import (
 python CollectorInvestor.py \
   --offset 0 \
   --limit 50 \
+  --event-id 4053663 \
   --output batch_raw.json \
   --timeout 45
 ```
 
-**Output:** `batch_raw.json`
-```json
-[
-  {
-    "id": 4453442,
-    "title": "1986 Fleer #32 Patrick Ewing RC NM",
-    "subtitle": "DoubleD Vintage Basketball Cards",
-    "description": "Great condition, see photos.",
-    "image_url": "https://ciaimages.blob.core.windows.net/...",
-    "image_urls": ["https://...", "https://...", "https://..."],
-    "category": {"sport": "basketball", "era": "Vintage"}
-  }
-]
-```
-
-**Step 2: Tag with OCR**
+**Step 2: Products are tagged (if started API)**
 
 ```bash
-python tagger.py \
-  --input batch_raw.json \
-  --output batch_tagged.json
+# Via API
+curl -X POST http://localhost:8000/pipeline/run \
+  -H "Content-Type: application/json" \
+  -d '{"limit": 50, "event_id": "4053663"}'
 ```
 
-**Output:** `batch_tagged.json`
-```json
-[
-  {
-    "id": 4453442,
-    "title": "1986 Fleer #32 Patrick Ewing RC NM",
-    "tags": [
-      "patrick ewing", "1986 fleer", "rookie card", "rc",
-      "psa 10", "gem mint", "hall of fame", ...
-    ]
-  }
-]
-```
-
-**Step 3: Load into API (optional)**
+**Step 3: Search or post separately**
 
 ```bash
-# Products persist in data/products.json after tagging
-# Search via API
-curl "http://localhost:8000/search?q=ewing%20rookie"
+# Just post tags (manually)
+curl -X POST http://localhost:8000/tags/post-all
 ```
 
 ---
 
-### Workflow 3: Direct Tagger (Tags Only)
+### Workflow 3: Post-Only (Tags Already Generated)
 
-**Best for:** Testing OCR on a single product; debugging failures
-
-**Single product:**
+**Best for:** Reposting old tags; batch updates
 
 ```bash
-python tagger.py --input products.json --output result.json
+# Post ALL tags from database to Collector Investor
+# (includes both old and new tags)
+curl -X POST http://localhost:8000/tags/post-all \
+  -H "Content-Type: application/json"
 ```
 
-**Or programmatically:**
-
-```python
-from src.services.tagger_service import generate_tags
-import json
-
-product = {
-    "id": 123,
-    "title": "1986 Fleer #32 Patrick Ewing RC",
-    "subtitle": "Vintage",
-    "description": "Near mint condition.",
-    "image_url": "https://example.com/front.jpg",
-    "image_urls": [
-        "https://example.com/front.jpg",
-        "https://example.com/back.jpg"
-    ],
-    "category": {"sport": "basketball"}
+**Response:**
+```json
+{
+  "success": true,
+  "total": 100,
+  "successful": 98,
+  "failed": 2,
+  "results": [
+    {
+      "listing_id": "4607163",
+      "title": "2025 Topps Chrome Kon Knueppel RC...",
+      "status_code": 200,
+      "success": true,
+      "response": "API response text"
+    }
+  ]
 }
-
-tags = generate_tags(product)
-print(f"Generated {len(tags)} tags:")
-for tag in tags:
-    print(f"  - {tag}")
 ```
 
 ---
@@ -469,14 +537,14 @@ GET /
 **Response:**
 ```json
 {
-  "status": "healthy",
+  "status": "ok",
   "products_in_db": 1234
 }
 ```
 
 ---
 
-### Pipeline: Fetch & Tag
+### 1. Complete Pipeline: Fetch → Tag → Post
 
 ```http
 POST /pipeline/run
@@ -486,9 +554,19 @@ Content-Type: application/json
   "offset": 0,
   "limit": 25,
   "timeout": 45,
+  "event_id": "4053663",
   "status": ""
 }
 ```
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `offset` | int | No (default: 0) | Starting position in listing results |
+| `limit` | int | No (default: 25) | Number of listings to fetch |
+| `timeout` | int | No (default: 45) | HTTP timeout in seconds |
+| `event_id` | string | No | Filter by Collector Investor Event ID (e.g., "4053663") |
+| `status` | string | No | Filter by listing status (e.g., "Active", "Draft") |
 
 **Response:**
 ```json
@@ -496,9 +574,21 @@ Content-Type: application/json
   "success": true,
   "fetched": 25,
   "products_tagged": 25,
-  "total_tags": 500
+  "total_tags": 1250,
+  "tags_posted": 25,
+  "tags_posted_failed": 0
 }
 ```
+
+**Response Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | True if all steps succeeded |
+| `fetched` | int | Listings fetched from API |
+| `products_tagged` | int | Products with tags generated |
+| `total_tags` | int | Total tags across all products |
+| `tags_posted` | int | Products successfully posted to Collector Investor |
+| `tags_posted_failed` | int | Products that failed posting |
 
 **Error Response:**
 ```json
@@ -510,14 +600,66 @@ Content-Type: application/json
 
 ---
 
+### 2. Post All Tags to Collector Investor
+
+```http
+POST /tags/post-all
+Content-Type: application/json
+```
+
+**Purpose:** Post ALL product tags from database to Collector Investor API
+
+**Response:**
+```json
+{
+  "success": true,
+  "total": 150,
+  "successful": 148,
+  "failed": 2,
+  "results": [
+    {
+      "listing_id": "4607163",
+      "title": "2025 Topps Chrome Kon Knueppel RC...",
+      "status_code": 200,
+      "success": true,
+      "response": ""
+    },
+    {
+      "listing_id": "4606975",
+      "title": "2025 Topps Chrome Anthony Edwards...",
+      "status_code": 200,
+      "success": true,
+      "response": ""
+    }
+  ]
+}
+```
+
+**Response Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | True if all postings succeeded |
+| `total` | int | Total products with tags |
+| `successful` | int | Products successfully posted |
+| `failed` | int | Products that failed posting |
+| `results` | array | Detailed result for each product |
+
+**Important Notes:**
+- ⚠️ Posts **ALL tags** from database (including old ones)
+- Use `/pipeline/run` for new products only (automatic tag posting)
+- Use `/tags/post-all` for manual reposting or batch updates
+- Authentication: RWX_SECURE signing handled automatically
+
+---
+
 ### Search Products
 
 ```http
-GET /search?q=patrick+ewing&limit=50
+GET /search?q=patrick+ewing
 ```
 
 **Parameters:**
-- `q` (required): Search query (e.g., "patrick ewing", "1986 fleer", "rookie")
+- `q` (required): Search query
 - `limit` (optional): Max results (default: 50)
 
 **Response:**
@@ -527,16 +669,10 @@ GET /search?q=patrick+ewing&limit=50
   "total": 3,
   "results": [
     {
-      "product_id": 4453442,
+      "id": 4453442,
       "title": "1986 Fleer #32 Patrick Ewing RC NM",
       "score": 12,
-      "matched_tags": ["patrick ewing", "ewing", "rc", "rookie card"]
-    },
-    {
-      "product_id": 4454100,
-      "title": "1992 Fleer Patrick Ewing",
-      "score": 8,
-      "matched_tags": ["patrick ewing", "ewing"]
+      "tags": ["patrick ewing", "ewing", "rc", "rookie card"]
     }
   ]
 }
@@ -550,19 +686,7 @@ GET /search?q=patrick+ewing&limit=50
 GET /products
 ```
 
-**Response:**
-```json
-[
-  {
-    "id": 4453442,
-    "title": "1986 Fleer #32 Patrick Ewing RC NM",
-    "description": "...",
-    "image_url": "...",
-    "subtitle": "...",
-    "tags": [...]
-  }
-]
-```
+**Response:** Array of all products with tags
 
 ---
 
@@ -572,27 +696,7 @@ GET /products
 GET /products/{product_id}
 ```
 
-**Example:**
-```http
-GET /products/4453442
-```
-
-**Response:**
-```json
-{
-  "id": 4453442,
-  "title": "1986 Fleer #32 Patrick Ewing RC NM",
-  "description": "Great condition, slight wear on edges.",
-  "image_url": "https://ciaimages.blob.core.windows.net/...",
-  "subtitle": "DoubleD Vintage Basketball Cards",
-  "tags": [
-    "patrick ewing",
-    "1986 fleer",
-    "rookie card",
-    ...
-  ]
-}
-```
+**Response:** Full product details including tags
 
 ---
 
@@ -600,21 +704,183 @@ GET /products/4453442
 
 ```http
 GET /products/{product_id}/tags
+
+---
+
+## 🏷️ Tag Posting System
+
+The Sports Card Tagger now automatically posts generated tags back to the Collector Investor API. Here's how it works:
+
+### Architecture
+
+```
+┌─────────────────────────────────┐
+│  Generated Product with Tags    │
+│  {                              │
+│    "id": "4607163",             │
+│    "tags": ["tag1", "tag2", ...]│
+│  }                              │
+└────────────┬────────────────────┘
+             │
+             ↓ (Transform format)
+┌─────────────────────────────────┐
+│  API Format                     │
+│  {                              │
+│    "Items": {                   │
+│      "ListingID": "4607163",    │
+│      "Tags": "tag1, tag2, ..." │
+│    }                            │
+│  }                              │
+└────────────┬────────────────────┘
+             │
+             ↓ (Sign with RWX_SECURE)
+┌─────────────────────────────────┐
+│  POST /api/listing/createtags   │
+│  Headers:                       │
+│  - Authorization: RWX_SECURE... │
+│  - Date: RFC1123                │
+│  - Content-MD5: hash            │
+└────────────┬────────────────────┘
+             │
+             ↓ (Collector Investor API)
+┌─────────────────────────────────┐
+│  Tags Added to Listing          │
+│  Now searchable by buyers!      │
+└─────────────────────────────────┘
 ```
 
-**Response:**
+### Key Features
+
+**1. Smart Posting (No Duplicates)**
+
+- `/pipeline/run` posts only **newly generated tags** from current run
+- Only the 25 new products are posted, not all 100 in database
+- Subsequent runs only post new products
+- **No accidental re-posting of old tags**
+
+**2. Batch Posting**
+
+- `/tags/post-all` posts **all tags** from database
+- Use for manual batch updates or reposting
+- Helpful if API connection was lost previously
+
+**3. RWX_SECURE Authentication**
+
+- Uses HMAC-SHA256 signing (already configured)
+- Content-MD5 hashing for request integrity
+- RFC1123 date headers
+- Credentials from `.env` (no hardcoding)
+
+**4. Error Handling**
+
+- Individual product failures don't block others
+- Detailed result tracking per product
+- HTTP status codes and response text captured
+- Easy debugging via results array
+
+### Format Transformation
+
+**Input (from tagger):**
+```python
+product = {
+    "id": "4607163",
+    "title": "2025 Topps Chrome Kon Knueppel RC...",
+    "tags": [
+        "kon knueppel",
+        "2025 topps chrome",
+        "rookie card",
+        "rc",
+        ...
+    ]
+}
+```
+
+**Transformation:**
+```python
+json_body = {
+    "Items": {
+        "ListingID": product["id"],  # "4607163"
+        "Tags": ", ".join(product["tags"])  # "kon knueppel, 2025 topps chrome, rookie card, rc, ..."
+    }
+}
+```
+
+**Output (to API):**
 ```json
 {
-  "product_id": 4453442,
-  "title": "1986 Fleer #32 Patrick Ewing RC NM",
-  "tags": [
-    "patrick ewing",
-    "1986 fleer",
-    "rookie card",
-    ...
+  "Items": {
+    "ListingID": "4607163",
+    "Tags": "kon knueppel, 2025 topps chrome, rookie card, rc, fanatical, photo variation, ssp, nba, basketball, charlotte hornets, 2025, topps, ..."
+  }
+}
+```
+
+### Endpoint Details
+
+**Collector Investor API Endpoint:**
+```
+POST https://bid.collectorinvestorauctions.com/api/listing/createtags
+Authorization: RWX_SECURE {username}:{signature}
+Date: Wed, 15 Apr 2026 06:00:40 GMT
+Content-MD5: {base64_md5_hash}
+Content-Type: application/json
+
+{"Items": {"ListingID": "4607163", "Tags": "tag1, tag2, ..."}}
+```
+
+### Monitoring & Debugging
+
+**View posting results:**
+
+```bash
+# From /pipeline/run response
+{
+  "tags_posted": 25,        # ✓ Successfully posted
+  "tags_posted_failed": 0   # ✗ Failed to post
+}
+
+# From /tags/post-all detailed results
+{
+  "results": [
+    {
+      "listing_id": "4607163",
+      "title": "2025 Topps Chrome Kon Knueppel RC...",
+      "status_code": 200,
+      "success": true
+    },
+    {
+      "listing_id": "4606975",
+      "status_code": 503,     # ← Server error
+      "success": false,
+      "response": "Service Unavailable"
+    }
   ]
 }
 ```
+
+**Enable detailed logging:**
+
+```python
+# In main.py, the pipeline function prints:
+print("Posting tags to Collector Investor API...")
+
+# For each product:
+print(f"✓ [4607163] 2025 Topps Chrome... - Success")
+print(f"✗ [4606975] 2025 Topps Chrome... - Status: 503")
+
+# Summary:
+print(f"Tags posted: 25 successful, 0 failed")
+```
+
+### Troubleshooting Tag Posting
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| 401 Unauthorized | Bad credentials | Check `.env` USERNAME and BASE64_TOKEN |
+| 403 Forbidden | Signature mismatch | Verify HMAC-SHA256 signing in code |
+| 404 Not Found | Invalid ListingID | Ensure product IDs are correct |
+| 400 Bad Request | Malformed Tags string | Check tags format (comma-separated) |
+| 503 Server Error | API temporarily down | Retry with `/tags/post-all` later |
 
 ---
 

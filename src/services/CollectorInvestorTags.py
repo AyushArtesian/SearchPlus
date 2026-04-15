@@ -7,9 +7,11 @@ import datetime
 from urllib.parse import urlparse
 from pathlib import Path
 
+from src.config import COLLECTOR_INVESTOR_USERNAME, COLLECTOR_INVESTOR_BASE64_TOKEN
+
 # Config
-username = "collectorinvestorapiuser"
-base64_token = "U4uRz/MrYA5O4lQNw/zHIlq7v5ez+Mv8ljw80oq3pVU="
+username = COLLECTOR_INVESTOR_USERNAME
+base64_token = COLLECTOR_INVESTOR_BASE64_TOKEN
 uri = "https://bid.collectorinvestorauctions.com/api/listing/createtags"
 
 content_type = "application/json"

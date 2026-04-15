@@ -18,8 +18,8 @@ DATA_DIR.mkdir(exist_ok=True)
 PRODUCTS_DB = DATA_DIR / "products.json"
 
 # CollectorInvestor API
-COLLECTOR_INVESTOR_USERNAME = "collectorinvestorapiuser"
-COLLECTOR_INVESTOR_BASE64_TOKEN = "U4uRz/MrYA5O4lQNw/zHIlq7v5ez+Mv8ljw80oq3pVU="
+COLLECTOR_INVESTOR_USERNAME = os.getenv("COLLECTOR_INVESTOR_USERNAME", "").strip()
+COLLECTOR_INVESTOR_BASE64_TOKEN = os.getenv("COLLECTOR_INVESTOR_BASE64_TOKEN", "").strip()
 COLLECTOR_INVESTOR_API_URI_TEMPLATE = "https://bid.collectorinvestorauctions.com/api/listing/search/{offset}/{limit}"
 COLLECTOR_INVESTOR_CONTENT_TYPE = "application/json"
 COLLECTOR_INVESTOR_DEFAULT_TIMEOUT = 45
