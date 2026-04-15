@@ -8,7 +8,7 @@ from src.services.collector_investor import fetch_products
 from src.services.tagger_service import generate_tags
 from src.services.search_service import search_products
 from src.services.CollectorInvestorTags import send_all_tags
-from src.storage import load_products, add_or_update_product, get_product_count
+from src.storage import load_products, add_or_update_product, get_product_count, should_skip_tagging, record_tagging
 
 
 app = FastAPI(title="Sports Card Tagger", version="1.0.0")
@@ -33,8 +33,24 @@ def health_check():
 async def run_pipeline(request: PipelineRunRequest) -> PipelineRunResponse:
     """
     Fetch products from CollectorInvestor, generate tags with OpenAI, save to database,
-    and post tags to Collector Investor API.
+    and post tags to Collector Investor API - ONE BY ONE.
+    
+    Workflow:
+    1. Fetch product (for specific event)
+    2. Generate tags
+    3. Save to database
+    4. Post tags to API
+    5. Record in tagging history to prevent duplicates
+    
+    REQUIRED: event_id must be provided
     """
+    # Validate event_id is provided and not empty
+    if not request.event_id or not request.event_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="event_id is required. Please provide a CollectorInvestor Event ID (e.g., '4053663')"
+        )
+    
     try:
         products = fetch_products(
             offset=request.offset,
@@ -56,44 +72,83 @@ async def run_pipeline(request: PipelineRunRequest) -> PipelineRunResponse:
             tags_posted_failed=0,
         )
 
-    # Tag each product and persist immediately so progress is not lost.
+    # One-by-one workflow: Tag → Save → Post for each product
     total_tags = 0
-    for i, product in enumerate(products, 1):
-        product_id = product.get("id", i)
+    tags_posted = 0
+    tags_posted_failed = 0
+    event_id = request.event_id.strip()  # Normalize event_id
 
+    for i, product in enumerate(products, 1):
+        product_id = int(product.get("id", i))
+        event_id = request.event_id or "default"  # Use "default" if no event_id provided
         has_image = bool(product.get("image_url"))
         image_indicator = "with image" if has_image else "text only"
 
-        print(
-            f"Tagging {i}/{len(products)}: {product.get('title', f'Product {product_id}')} ({image_indicator})..."
-        )
+        print(f"\n{'='*70}")
+        print(f"[{i}/{len(products)}] Processing: {product.get('title', f'Product {product_id}')} ({image_indicator})...")
+        print(f"{'='*70}")
 
-        tags = generate_tags(product)
-        product["tags"] = tags
+        # Check if already tagged in this event
+        if should_skip_tagging(product_id, event_id):
+            print(f"  ⊘ Skipped (already tagged in event {event_id})")
+            continue
 
-        # Keep compatibility with any old code that reads "name".
-        if not product.get("name") and product.get("title"):
-            product["name"] = product["title"]
+        # Step 1: Generate tags
+        print(f"  → Generating tags...")
+        try:
+            tags = generate_tags(product)
+            product["tags"] = tags
 
-        total_tags += len(tags)
+            # Keep compatibility with any old code that reads "name".
+            if not product.get("name") and product.get("title"):
+                product["name"] = product["title"]
 
-        add_or_update_product(product)
+            total_tags += len(tags)
+            print(f"  ✓ Generated {len(tags)} tags")
+        except Exception as e:
+            print(f"  ✗ Tag generation failed: {e}")
+            record_tagging(product_id, event_id, 0, "failed", str(e))
+            continue
 
-        print(f"   Generated {len(tags)} tags")
+        # Step 2: Save to database
+        print(f"  → Saving to database...")
+        try:
+            add_or_update_product(product)
+            print(f"  ✓ Saved to database")
+        except Exception as e:
+            print(f"  ✗ Failed to save: {e}")
+            continue
 
-    print(f"Pipeline complete. Tagged {len(products)} products ({total_tags} total tags)")
+        # Step 3: Post tags to API
+        print(f"  → Posting tags to Collector Investor API...")
+        post_success = False
+        try:
+            from src.services.CollectorInvestorTags import send_tags_for_product
+            post_result = send_tags_for_product(product)
+            
+            if post_result.get("success"):
+                tags_posted += 1
+                post_success = True
+                print(f"  ✓ Posted successfully (Status: {post_result.get('status_code')})")
+            else:
+                tags_posted_failed += 1
+                print(f"  ✗ Post failed (Status: {post_result.get('status_code')}) - {post_result.get('response')}")
+        except Exception as e:
+            tags_posted_failed += 1
+            print(f"  ✗ Post error: {e}")
+        
+        # Step 4: Record in tagging history
+        status = "posted" if post_success else "pending"
+        record_tagging(product_id, event_id, len(tags), status)
 
-    # Post only newly tagged products to Collector Investor API
-    print("\nPosting tags to Collector Investor API...")
-    try:
-        post_results = send_all_tags(products_to_post=products)
-        tags_posted = sum(1 for r in post_results if r.get("success"))
-        tags_posted_failed = sum(1 for r in post_results if not r.get("success"))
-        print(f"Tags posted: {tags_posted} successful, {tags_posted_failed} failed")
-    except Exception as e:
-        print(f"Error posting tags: {e}")
-        tags_posted = 0
-        tags_posted_failed = len(products)
+    print(f"\n{'='*70}")
+    print(f"Pipeline complete!")
+    print(f"  • Fetched: {len(products)}")
+    print(f"  • Tagged: {len(products)}")
+    print(f"  • Total tags: {total_tags}")
+    print(f"  • Posted: {tags_posted}")
+    print(f"  • Failed: {tags_posted_failed}")
+    print(f"{'='*70}\n")
 
     return PipelineRunResponse(
         success=True,
@@ -203,6 +258,18 @@ def get_product(product_id: int) -> dict:
         raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
 
     return product
+
+
+@app.get("/tagging-history")
+def get_tagging_history_endpoint(product_id: int = None, event_id: str = None) -> dict:
+    """Get tagging history records for debugging."""
+    from src.storage import get_tagging_history
+    
+    records = get_tagging_history(product_id=product_id, event_id=event_id)
+    return {
+        "total_records": len(records),
+        "records": records
+    }
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 # Database file
-PRODUCTS_DB = DATA_DIR / "products.json"
+PRODUCTS_DB = DATA_DIR / "products.db"
 
 # CollectorInvestor API
 COLLECTOR_INVESTOR_USERNAME = os.getenv("COLLECTOR_INVESTOR_USERNAME", "").strip()
