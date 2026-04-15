@@ -6,6 +6,7 @@ import hmac
 import html
 import json
 import re
+import time
 from datetime import datetime, UTC
 from typing import Any
 from urllib.parse import urlparse
@@ -291,22 +292,57 @@ def fetch_all_products_for_event(event_id: str, page_size: int = 50, timeout: in
     all_products = []
     offset = 0
     total_fetched = 0
+    page_num = 0
+    max_retries = 3
+    
+    print(f"\n  🔄 Starting pagination for event {event_id}...")
     
     while True:
-        products = fetch_products(
-            offset=offset,
-            limit=page_size,
-            timeout=timeout,
-            event_id=event_id
-        )
+        page_num += 1
+        print(f"  📄 Page {page_num}: Fetching offset={offset}, limit={page_size}...", flush=True)
+        
+        retry_count = 0
+        products = None
+        last_error = None
+        
+        # Retry logic for network issues
+        while retry_count < max_retries and products is None:
+            try:
+                products = fetch_products(
+                    offset=offset,
+                    limit=page_size,
+                    timeout=timeout,
+                    event_id=event_id
+                )
+            except Exception as e:
+                last_error = e
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"  ⚠ Retry {retry_count}/{max_retries}: {str(e)[:100]}... waiting 2s")
+                    time.sleep(2)
+                else:
+                    print(f"  ✗ ERROR on page {page_num} after {max_retries} retries: {e}")
+                    raise
+        
+        if products is None:
+            print(f"  ✗ Failed to fetch page {page_num}: {last_error}")
+            raise RuntimeError(f"Failed to fetch page {page_num}: {last_error}")
         
         if not products:
+            print(f"  ✓ End of results (page {page_num} returned 0 items)")
             break  # No more products
         
+        print(f"  ✓ Page {page_num}: Got {len(products)} items")
         all_products.extend(products)
         total_fetched += len(products)
-        offset += page_size
+        offset += 1  # Increment page number, not offset by limit
         
-        print(f"  Fetched {total_fetched} products so far...")
+        print(f"  📊 Total so far: {total_fetched} products...")
+        
+        # Add delay between requests to avoid rate limiting
+        if page_num < 100:  # Don't sleep after last page
+            print(f"  ⏳ Waiting 1 second before next request...")
+            time.sleep(1.0)  # 1 second delay between requests
     
+    print(f"  ✅ Pagination complete: {total_fetched} total products across {page_num} pages\n")
     return all_products

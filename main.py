@@ -283,7 +283,7 @@ async def run_full_event_pipeline(request: FullEventPipelineRequest) -> FullEven
     """
     Process ALL listings for a specific event automatically.
     
-    Automatically handles pagination - fetches all pages, generates tags, bypasses duplicates.
+    Workflow: Fetch page → Process each product (generate → save → post) → Fetch next page → Repeat
     
     ONLY requires: event_id
     
@@ -299,114 +299,138 @@ async def run_full_event_pipeline(request: FullEventPipelineRequest) -> FullEven
         )
     
     event_id = request.event_id.strip()
-    
-    # Fetch ALL products for this event (auto-paginated)
-    from src.services.collector_investor import fetch_all_products_for_event
+    page_size = 50
     
     print(f"\n{'='*70}")
     print(f"Processing ALL listings for event: {event_id}")
+    print(f"Page-by-page workflow: Fetch → Process → Next page")
     print(f"{'='*70}\n")
     
-    try:
-        all_products = fetch_all_products_for_event(event_id)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    
-    if not all_products:
-        return FullEventPipelineResponse(
-            success=False,
-            event_id=event_id,
-            total_fetched=0,
-            products_tagged=0,
-            products_skipped=0,
-            total_tags=0,
-            tags_posted=0,
-            tags_posted_failed=0,
-            pages_processed=0,
-            total_pages=0,
-        )
-    
-    # Process each product: Tag → Save → Post → Record
+    # Metrics
+    total_fetched = 0
     total_tags = 0
     tags_posted = 0
     tags_posted_failed = 0
     products_tagged = 0
     products_skipped = 0
+    pages_processed = 0
+    global_product_counter = 0
     
-    for i, product in enumerate(all_products, 1):
-        product_id = int(product.get("id", i))
+    import time
+    
+    # Page-by-page pagination
+    offset = 0
+    while True:
+        pages_processed += 1
+        print(f"\n{'─'*70}")
+        print(f"📄 PAGE {pages_processed}: Fetching offset={offset}, limit={page_size}...")
+        print(f"{'─'*70}")
         
-        # Check if already tagged
-        if should_skip_tagging(product_id, event_id):
-            products_skipped += 1
-            print(f"\r[{i}/{len(all_products)}] ⊘ Skipped | Total: Tagged={products_tagged}, Skipped={products_skipped}", end="", flush=True)
-            continue
-        
-        # Generate tags
+        # Fetch page
         try:
-            tags = generate_tags(product)
-            product["tags"] = tags
-            if not product.get("name") and product.get("title"):
-                product["name"] = product["title"]
-            
-            total_tags += len(tags)
-            products_tagged += 1
+            page_products = fetch_products(
+                offset=offset,
+                limit=page_size,
+                timeout=45,
+                event_id=event_id
+            )
         except Exception as e:
-            print(f"\n[{i}/{len(all_products)}] ✗ Tag generation failed: {e}")
-            record_tagging(product_id, event_id, 0, "failed", str(e))
-            continue
+            print(f"✗ ERROR fetching page {pages_processed}: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
         
-        # Save to database
-        try:
-            add_or_update_product(product)
-        except Exception as e:
-            print(f"\n[{i}/{len(all_products)}] ✗ Failed to save: {e}")
-            continue
+        if not page_products:
+            print(f"✓ End of results - no more products")
+            break
         
-        # Post to API
-        post_success = False
-        try:
-            from src.services.CollectorInvestorTags import send_tags_for_product
-            post_result = send_tags_for_product(product)
+        print(f"✓ Fetched {len(page_products)} items for this page")
+        total_fetched += len(page_products)
+        
+        # Process each product on this page: Generate → Save → Post
+        for product_idx, product in enumerate(page_products, 1):
+            global_product_counter += 1
+            product_id = int(product.get("id", global_product_counter))
+            title = product.get("title", "Unknown")
             
-            if post_result.get("success"):
-                tags_posted += 1
-                post_success = True
-            else:
+            # Check if already tagged
+            if should_skip_tagging(product_id, event_id):
+                products_skipped += 1
+                print(f"  [{product_idx}/{len(page_products)}] ⊘ {product_id} - Skipped (already tagged)")
+                continue
+            
+            # Generate tags
+            try:
+                print(f"  [{product_idx}/{len(page_products)}] → {product_id} - Generating tags...")
+                tags = generate_tags(product)
+                product["tags"] = tags
+                if not product.get("name") and product.get("title"):
+                    product["name"] = product["title"]
+                
+                total_tags += len(tags)
+                print(f"  [{product_idx}/{len(page_products)}] ✓ Generated {len(tags)} tags")
+            except Exception as e:
+                print(f"  [{product_idx}/{len(page_products)}] ✗ Tag generation failed: {str(e)[:100]}")
+                record_tagging(product_id, event_id, 0, "failed", str(e))
+                continue
+            
+            # Save to database
+            try:
+                add_or_update_product(product)
+                print(f"  [{product_idx}/{len(page_products)}] ✓ Saved to database")
+            except Exception as e:
+                print(f"  [{product_idx}/{len(page_products)}] ✗ Failed to save: {str(e)[:100]}")
+                continue
+            
+            # Post to API
+            post_success = False
+            try:
+                from src.services.CollectorInvestorTags import send_tags_for_product
+                print(f"  [{product_idx}/{len(page_products)}] → Posting to API...")
+                post_result = send_tags_for_product(product)
+                
+                if post_result.get("success"):
+                    tags_posted += 1
+                    post_success = True
+                    print(f"  [{product_idx}/{len(page_products)}] ✓ Posted successfully")
+                else:
+                    tags_posted_failed += 1
+                    print(f"  [{product_idx}/{len(page_products)}] ✗ Post failed: {post_result.get('response')}")
+            except Exception as e:
                 tags_posted_failed += 1
-        except Exception as e:
-            tags_posted_failed += 1
+                print(f"  [{product_idx}/{len(page_products)}] ✗ Post error: {str(e)[:100]}")
+            
+            # Record in history
+            status = "posted" if post_success else "pending"
+            record_tagging(product_id, event_id, len(tags), status)
+            products_tagged += 1
         
-        # Record in history
-        status = "posted" if post_success else "pending"
-        record_tagging(product_id, event_id, len(tags), status)
+        # Move to next page
+        offset += 1
         
-        # Progress indicator
-        print(f"\r[{i}/{len(all_products)}] ✓ Tagged | Total: Tagged={products_tagged}, Skipped={products_skipped}", end="", flush=True)
+        # Delay before next page
+        if page_products:
+            print(f"\n⏳ Waiting 1 second before next page...")
+            time.sleep(1.0)
     
-    pages_processed = (len(all_products) + 49) // 50  # Ceil division
-    total_pages = (len(all_products) + 49) // 50
-    
-    print(f"\n\n{'='*70}")
+    print(f"\n{'='*70}")
     print(f"Event {event_id} - Complete!")
-    print(f"  • Total fetched: {len(all_products)}")
+    print(f"  • Pages processed: {pages_processed}")
+    print(f"  • Total fetched: {total_fetched}")
     print(f"  • Tagged: {products_tagged}")
     print(f"  • Skipped: {products_skipped}")
     print(f"  • Total tags: {total_tags}")
     print(f"  • Posted: {tags_posted}")
     print(f"  • Failed: {tags_posted_failed}")
-    print(f"  • Pages: {pages_processed}")
     print(f"{'='*70}\n")
     
     return FullEventPipelineResponse(
         success=True,
         event_id=event_id,
-        total_fetched=len(all_products),
+        total_fetched=total_fetched,
         products_tagged=products_tagged,
         products_skipped=products_skipped,
         total_tags=total_tags,
         tags_posted=tags_posted,
         tags_posted_failed=tags_posted_failed,
         pages_processed=pages_processed,
-        total_pages=total_pages,
+        total_pages=pages_processed,
     )
