@@ -45,3 +45,21 @@ class ProductTagResponse(BaseModel):
     id: int
     title: str
     tags: list[str] = Field(default_factory=list)
+
+
+class PostTagResult(BaseModel):
+    """Result for a single product tag posting."""
+    listing_id: str
+    title: str
+    status_code: Optional[int]
+    success: bool
+    response: str
+
+
+class PostTagsResponse(BaseModel):
+    """Response model for posting tags to Collector Investor."""
+    success: bool
+    total: int
+    successful: int
+    failed: int
+    results: list[PostTagResult] = Field(default_factory=list)

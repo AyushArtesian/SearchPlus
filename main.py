@@ -3,10 +3,11 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.models import PipelineRunRequest, PipelineRunResponse
+from src.models import PipelineRunRequest, PipelineRunResponse, PostTagsResponse, PostTagResult
 from src.services.collector_investor import fetch_products
 from src.services.tagger_service import generate_tags
 from src.services.search_service import search_products
+from src.services.CollectorInvestorTags import send_all_tags
 from src.storage import load_products, add_or_update_product, get_product_count
 
 
@@ -95,6 +96,56 @@ def search_endpoint(q: str = Query(..., description="Search query")) -> dict:
     Query example: /search?q=patrick+ewing
     """
     return search_products(q)
+
+
+@app.post("/tags/post-all")
+def post_all_tags_endpoint() -> PostTagsResponse:
+    """
+    Post all product tags to Collector Investor API.
+    
+    This endpoint reads all products from the database, transforms them to the required format,
+    and sends their tags to the Collector Investor API for each listing.
+    
+    Returns a detailed summary of which products succeeded and failed.
+    """
+    try:
+        results = send_all_tags()
+        
+        if not results:
+            return PostTagsResponse(
+                success=False,
+                total=0,
+                successful=0,
+                failed=0,
+                results=[]
+            )
+        
+        # Count successes and failures
+        successful = sum(1 for r in results if r["success"])
+        failed = sum(1 for r in results if not r["success"])
+        
+        # Convert results to PostTagResult models
+        post_results = [
+            PostTagResult(
+                listing_id=r["listing_id"],
+                title=r["title"],
+                status_code=r.get("status_code"),
+                success=r["success"],
+                response=r["response"]
+            )
+            for r in results
+        ]
+        
+        return PostTagsResponse(
+            success=failed == 0,
+            total=len(results),
+            successful=successful,
+            failed=failed,
+            results=post_results
+        )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/products")
