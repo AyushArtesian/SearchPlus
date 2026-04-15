@@ -275,3 +275,38 @@ def fetch_products(
 
     products = [listing_to_product(item) for item in listings]
     return [p for p in products if p.get("id") and p.get("title")]
+
+def fetch_all_products_for_event(event_id: str, page_size: int = 50, timeout: int = 45) -> list[dict]:
+    """
+    Fetch ALL products for an event by auto-paginating.
+    
+    Args:
+        event_id: Event ID to fetch
+        page_size: Items per page (default 50)
+        timeout: HTTP timeout
+    
+    Returns:
+        List of all products for the event
+    """
+    all_products = []
+    offset = 0
+    total_fetched = 0
+    
+    while True:
+        products = fetch_products(
+            offset=offset,
+            limit=page_size,
+            timeout=timeout,
+            event_id=event_id
+        )
+        
+        if not products:
+            break  # No more products
+        
+        all_products.extend(products)
+        total_fetched += len(products)
+        offset += page_size
+        
+        print(f"  Fetched {total_fetched} products so far...")
+    
+    return all_products

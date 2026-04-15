@@ -66,3 +66,20 @@ class PostTagsResponse(BaseModel):
     successful: int
     failed: int
     results: list[PostTagResult] = Field(default_factory=list)
+
+class FullEventPipelineRequest(BaseModel):
+    """Request model for processing entire event."""
+    event_id: str = Field(..., description="REQUIRED: CollectorInvestor Event ID")
+
+class FullEventPipelineResponse(BaseModel):
+    """Response for processing entire event."""
+    success: bool
+    event_id: str
+    total_fetched: int
+    products_tagged: int
+    products_skipped: int
+    total_tags: int
+    tags_posted: int
+    tags_posted_failed: int
+    pages_processed: int
+    total_pages: int

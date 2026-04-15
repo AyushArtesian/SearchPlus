@@ -39,3 +39,12 @@ TAG_COUNT_MIN = 40
 TAG_COUNT_MAX = 50
 TAG_TEMPERATURE = 0.3
 TAG_MAX_TOKENS = 800
+
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "sports_card_tagger")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+
+# PostgreSQL connection string
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
