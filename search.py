@@ -61,7 +61,7 @@ def search_products(query: str) -> dict:
         
         if score > 0:
             result = {
-                "id": product.get("ListingID"),
+                "id": product.get("id"),
                 "title": product.get("title") or product.get("name"),
                 "subtitle": product.get("subtitle", ""),
                 "category": product.get("category"),

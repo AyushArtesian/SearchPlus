@@ -31,7 +31,7 @@ def get_product_by_id(product_id: int | str) -> Optional[dict]:
     products = load_products()
     product_id = int(product_id)
     for product in products:
-        if product.get("ListingID") == product_id:
+        if product.get("id") == product_id:
             return product
     return None
 
@@ -39,11 +39,11 @@ def get_product_by_id(product_id: int | str) -> Optional[dict]:
 def add_or_update_product(product: dict) -> None:
     """Add a new product or update existing one by ID."""
     products = load_products()
-    product_id = product.get("ListingID")
+    product_id = product.get("id")
     
     # Find and update or append
     for i, p in enumerate(products):
-        if p.get("ListingID") == product_id:
+        if p.get("id") == product_id:
             products[i] = product
             save_products(products)
             return

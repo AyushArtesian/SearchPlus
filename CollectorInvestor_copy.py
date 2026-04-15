@@ -128,7 +128,7 @@ def listing_to_product(
         image_url = extract_best_image_url(listing.get("Media") or [])
 
     product = {
-        "id": listing_id,
+        "ListingID": listing_id,
         "title": title,
         "description": description,
         "image_url": image_url,

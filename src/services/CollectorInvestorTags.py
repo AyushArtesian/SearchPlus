@@ -69,7 +69,7 @@ def load_products():
 def send_tags_for_product(product):
     """Send tags for a single product to the API"""
     try:
-        listing_id = str(product.get("ListingID"))
+        listing_id = str(product.get("id"))
         tags_list = product.get("tags", [])
         tags_str = ", ".join(tags_list)
         
@@ -99,7 +99,7 @@ def send_tags_for_product(product):
     
     except Exception as e:
         return {
-            "listing_id": str(product.get("ListingID")),
+            "listing_id": str(product.get("id")),
             "title": product.get("title", ""),
             "status_code": None,
             "success": False,

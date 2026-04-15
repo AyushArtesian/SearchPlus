@@ -284,7 +284,7 @@ def parse_lot_page(lot_url: str, html: str) -> dict[str, Any]:
     description = extract_description(soup, title)
 
     return {
-        "id": lot_id,
+        "ListingID": lot_id,
         "title": title,
         "description": description,
         "image_url": image_url,

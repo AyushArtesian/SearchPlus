@@ -18,6 +18,8 @@ class PipelineRunResponse(BaseModel):
     fetched: int = Field(..., description="Number of products fetched")
     products_tagged: int = Field(..., description="Number of products tagged")
     total_tags: int = Field(..., description="Total tags generated")
+    tags_posted: int = Field(0, description="Number of products with tags posted to API")
+    tags_posted_failed: int = Field(0, description="Number of products that failed to post tags")
 
 
 class ProductSearchResult(BaseModel):

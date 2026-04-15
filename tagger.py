@@ -173,14 +173,14 @@ def generate_tags(
             endpoint += "/"
         openai_client = OpenAI(api_key=api_key, base_url=endpoint)
 
-    product_id = product.get("id", "")
+    product_id = product.get("ListingID", "")
     title = _clean_text(product.get("title") or product.get("name"))
     subtitle = _clean_text(product.get("subtitle"))
     description = _clean_text(product.get("description"))
     image_url = _extract_image_url(product, store_base_url)
 
     payload_for_model: dict[str, Any] = {
-        "id": product_id,
+        "ListingID": product_id,
         "title": title,
         "description": description,
         "image_url": image_url,
