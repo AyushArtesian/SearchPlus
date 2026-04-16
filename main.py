@@ -3,8 +3,13 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.models import PipelineRunRequest, PipelineRunResponse, PostTagsResponse, PostTagResult, FullEventPipelineRequest, FullEventPipelineResponse, TagSingleListingRequest, TagSingleListingResponse
-from src.services.collector_investor import fetch_products
+from src.models import (
+    PipelineRunRequest, PipelineRunResponse, PostTagsResponse, PostTagResult,
+    FullEventPipelineRequest, FullEventPipelineResponse,
+    TagSingleListingRequest, TagSingleListingResponse,
+    VerifyListingTagsResponse
+)
+from src.services.collector_investor import fetch_products, fetch_listing_tags_by_id
 from src.services.tagger_service import generate_tags
 from src.services.search_service import search_products
 from src.services.CollectorInvestorTags import send_all_tags
@@ -420,6 +425,92 @@ async def delete_listing_from_history(listing_id: int, event_id: str = None) -> 
     except Exception as e:
         print(f"✗ Error deleting: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete: {str(e)}")
+
+
+@app.get("/verify/tags/{listing_id}/{event_id}")
+async def verify_listing_tags(listing_id: int, event_id: str, system_id: bool = Query(False, description="If true, convert listing_id from system_id by adding 1")) -> VerifyListingTagsResponse:
+    """
+    Verify tags for a SPECIFIC listing by listing_id and event_id.
+    
+    This endpoint searches through the production database to find the listing
+    and return its tags. Perfect for spot-checking after tagging.
+    
+    IMPORTANT: The verification API uses ListingId (which is system_id + 1).
+    If you have system_id from tagging, either:
+      1. Add 1 manually: /verify/tags/{system_id + 1}/{event_id}
+      2. Use system_id=true parameter: /verify/tags/{system_id}/{event_id}?system_id=true
+    
+    Parameters:
+        listing_id: The listing ID to verify (or system_id if system_id=true)
+        event_id: The event ID (for context)
+        system_id: If true, convert system_id to listing_id by adding 1 (default: false)
+    
+    Returns:
+        Tags posted to production for this specific listing
+    
+    Examples:
+        # Using listing_id directly (system_id + 1)
+        curl http://localhost:8000/verify/tags/4440024/4053663
+        
+        # Using system_id with auto-conversion
+        curl "http://localhost:8000/verify/tags/4440023/4053663?system_id=true"
+        
+    Success Response:
+        {
+            "success": true,
+            "listing_id": 4440024,
+            "event_id": "4053663",
+            "title": null,
+            "tags": ["pete rose", "1963", "topps", "rookie card", ...],
+            "has_tags": true,
+            "tags_count": 47,
+            "pages_searched": 1,
+            "message": "✓ Found 47 tags for listing 4440024 (searched 1 page)"
+        }
+    """
+    if not event_id or not event_id.strip():
+        raise HTTPException(status_code=400, detail="event_id is required")
+    
+    if listing_id <= 0:
+        raise HTTPException(status_code=400, detail="listing_id must be a positive integer")
+    
+    # Convert system_id to listing_id if requested
+    actual_listing_id = listing_id + 1 if system_id else listing_id
+    
+    event_id = event_id.strip()
+    
+    try:
+        result = fetch_listing_tags_by_id(listing_id=actual_listing_id, event_id=event_id)
+        
+        if result.get("success"):
+            tags = result.get("tags", [])
+            
+            return VerifyListingTagsResponse(
+                success=True,
+                listing_id=actual_listing_id,
+                event_id=event_id,
+                title=None,
+                tags=tags,
+                has_tags=len(tags) > 0,
+                tags_count=len(tags),
+                message="✓ Tags verified successfully",
+                pages_searched=1
+            )
+        else:
+            return VerifyListingTagsResponse(
+                success=False,
+                listing_id=actual_listing_id,
+                event_id=event_id,
+                title=None,
+                tags=[],
+                has_tags=False,
+                tags_count=0,
+                message="✗ Listing not found",
+                pages_searched=0
+            )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 if __name__ == "__main__":

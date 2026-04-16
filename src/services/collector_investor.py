@@ -346,3 +346,224 @@ def fetch_all_products_for_event(event_id: str, page_size: int = 50, timeout: in
     
     print(f"  ✅ Pagination complete: {total_fetched} total products across {page_num} pages\n")
     return all_products
+
+
+def fetch_verification_tags(skip: int = 0, take: int = 50, timeout: int = 45) -> dict:
+    """
+    Fetch items with their tags from production database via CollectorInvestor API.
+    
+    This endpoint is used to VERIFY that generated tags have been successfully posted
+    to the production database.
+    
+    Args:
+        skip: Number of items to skip (pagination offset)
+        take: Number of items to fetch (page size)
+        timeout: HTTP timeout in seconds
+    
+    Returns:
+        Dictionary containing:
+        - items: List of items with their tags
+        - total: Total number of items available
+        - skip: Items skipped
+        - take: Items taken
+        - status: API response status
+    """
+    base_uri = "https://bid.collectorinvestorauctions.com/api/listing/getlistingtags"
+    uri = f"{base_uri}/{skip}/{take}/0"  # /skip/take/filter format
+    
+    request_body = {"Items": {}}
+    body_str = json.dumps(request_body, separators=(",", ":"))
+    
+    headers = generate_headers(
+        COLLECTOR_INVESTOR_USERNAME,
+        COLLECTOR_INVESTOR_BASE64_TOKEN,
+        uri,
+        body_str,
+        COLLECTOR_INVESTOR_CONTENT_TYPE,
+    )
+    
+    print(f"  📋 Fetching verification tags: skip={skip}, take={take}...")
+    response = requests.get(uri, headers=headers, data=body_str, timeout=timeout)
+    
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Verification tags fetch failed (status {response.status_code}): {response.text[:300]}"
+        )
+    
+    payload = response.json()
+    print(f"  ✓ Received response with status: {payload.get('Status', 'unknown')}")
+    
+    return {
+        "items": payload.get("Items", []),
+        "total": payload.get("TotalCount", 0),
+        "skip": skip,
+        "take": take,
+        "status": payload.get("Status", "unknown"),
+        "raw_response": payload
+    }
+
+
+def fetch_listing_tags_by_id(listing_id: int, event_id: str, timeout: int = 45) -> dict:
+    """
+    Fetch tags for a SPECIFIC listing by searching through paginated results.
+    
+    Since the API doesn't support direct listing ID lookup, we paginate through
+    results and find the listing matching the given ID.
+    
+    NOTE: The API uses ListingId (not system_id). If you have system_id, add 1 to convert.
+    
+    Args:
+        listing_id: The listing ID to search for (NOT system_id - use listing_id which is system_id + 1)
+        event_id: The event ID (for context/verification)
+        timeout: HTTP timeout in seconds
+    
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating if listing was found
+        - tags: List of tags posted for this listing
+        - has_tags: Boolean indicating if tags were found
+    
+    Example:
+        # If you have system_id=4440023, convert to listing_id=4440024
+        result = fetch_listing_tags_by_id(listing_id=4440024, event_id="4053663")
+        print(result['success'])  # True
+        print(result['tags_count'])  # 47
+    """
+    base_uri = "https://bid.collectorinvestorauctions.com/api/listing/getlistingtags"
+    page_size = 50
+    max_pages = 50  # Search up to 2500 items
+    
+    for page in range(max_pages):
+        skip = page * page_size
+        uri = f"{base_uri}/{skip}/{page_size}/0"
+        
+        request_body = {"Items": {}}
+        body_str = json.dumps(request_body, separators=(",", ":"))
+        
+        headers = generate_headers(
+            COLLECTOR_INVESTOR_USERNAME,
+            COLLECTOR_INVESTOR_BASE64_TOKEN,
+            uri,
+            body_str,
+            COLLECTOR_INVESTOR_CONTENT_TYPE,
+        )
+        
+        response = requests.get(uri, headers=headers, data=body_str, timeout=timeout)
+        
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Failed to fetch listing tags (status {response.status_code}): {response.text[:300]}"
+            )
+        
+        payload = response.json()
+        
+        # API returns: List, PageIndex, PageSize, TotalItemCount, TotalPageCount
+        items = payload.get("List", [])
+        
+        if not items:
+            # End of results reached
+            break
+        
+        # Search for matching listing ID in this page
+        for item in items:
+            item_id = item.get("ListingId")
+            
+            # Try to match the listing ID
+            if item_id == listing_id:
+                tags_str = item.get("Tags", "")
+                # Parse comma-separated tags string into array
+                tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else []
+                
+                return {
+                    "success": True,
+                    "listing_id": listing_id,
+                    "event_id": event_id,
+                    "tags": tags,
+                    "has_tags": bool(tags),
+                    "tags_count": len(tags)
+                }
+    
+    # Not found after searching
+    return {
+        "success": False,
+        "listing_id": listing_id,
+        "event_id": event_id,
+        "tags": [],
+        "has_tags": False,
+        "tags_count": 0
+    }
+
+
+def fetch_all_verification_tags(page_size: int = 50, timeout: int = 45) -> dict:
+    """
+    Fetch ALL items with their tags by auto-paginating through verification endpoint.
+    
+    Args:
+        page_size: Items per page (default 50)
+        timeout: HTTP timeout
+    
+    Returns:
+        Dictionary containing aggregated results from all pages
+    """
+    all_items = []
+    skip = 0
+    page_num = 0
+    max_retries = 3
+    
+    print(f"\n  🔄 Starting verification tag pagination...")
+    
+    while True:
+        page_num += 1
+        print(f"  📄 Page {page_num}: Fetching skip={skip}, take={page_size}...")
+        
+        retry_count = 0
+        result = None
+        last_error = None
+        
+        # Retry logic for network issues
+        while retry_count < max_retries and result is None:
+            try:
+                result = fetch_verification_tags(
+                    skip=skip,
+                    take=page_size,
+                    timeout=timeout
+                )
+            except Exception as e:
+                last_error = e
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"  ⚠ Retry {retry_count}/{max_retries}: {str(e)[:100]}... waiting 2s")
+                    time.sleep(2)
+                else:
+                    print(f"  ✗ ERROR on page {page_num} after {max_retries} retries: {e}")
+                    raise
+        
+        if result is None:
+            print(f"  ✗ Failed to fetch page {page_num}: {last_error}")
+            raise RuntimeError(f"Failed to fetch page {page_num}: {last_error}")
+        
+        items = result.get("items", [])
+        if not items:
+            print(f"  ✓ End of results (page {page_num} returned 0 items)")
+            total = result.get("total", len(all_items))
+            break
+        
+        print(f"  ✓ Page {page_num}: Got {len(items)} items with tags")
+        all_items.extend(items)
+        skip += len(items)
+        
+        print(f"  📊 Total so far: {len(all_items)} items...")
+        
+        # Add delay between requests
+        if len(items) == page_size:  # More pages likely exist
+            print(f"  ⏳ Waiting 1 second before next request...")
+            time.sleep(1.0)
+    
+    print(f"  ✅ Verification complete: {len(all_items)} total items across {page_num} pages\n")
+    
+    return {
+        "items": all_items,
+        "total": total,
+        "pages_fetched": page_num,
+        "all_items_count": len(all_items)
+    }

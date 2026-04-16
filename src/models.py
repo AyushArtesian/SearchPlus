@@ -96,3 +96,44 @@ class TagSingleListingResponse(BaseModel):
     tags_generated: int
     tags_posted: bool
     message: str
+
+
+class VerificationTagItem(BaseModel):
+    """Single item with its tags from production database."""
+    id: Optional[int] = None
+    title: Optional[str] = None
+    tags: Optional[list[str]] = Field(default_factory=list, description="Tags posted to production database")
+    posted_date: Optional[str] = None
+
+
+class VerificationTagsResponse(BaseModel):
+    """Response for tag verification endpoint."""
+    success: bool
+    total_items: int
+    items_fetched: int
+    skip: int
+    take: int
+    items: list[VerificationTagItem] = Field(default_factory=list, description="Items with their tags from production DB")
+    pages_processed: int = 1
+
+
+class VerificationAllTagsResponse(BaseModel):
+    """Response for fetching ALL verification tags."""
+    success: bool
+    total_items: int
+    all_items_fetched: int
+    pages_processed: int
+    items: list[VerificationTagItem] = Field(default_factory=list, description="All items with their tags from production DB")
+
+
+class VerifyListingTagsResponse(BaseModel):
+    """Response for verifying tags of a specific listing."""
+    success: bool
+    listing_id: int
+    event_id: str
+    title: Optional[str] = None
+    tags: list[str] = Field(default_factory=list, description="Tags posted to production for this listing")
+    has_tags: bool = Field(False, description="Whether this listing has tags")
+    tags_count: int = Field(0, description="Number of tags")
+    message: str = ""
+    pages_searched: Optional[int] = Field(None, description="Number of pages searched to find this listing")
