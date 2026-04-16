@@ -83,3 +83,16 @@ class FullEventPipelineResponse(BaseModel):
     tags_posted_failed: int
     pages_processed: int
     total_pages: int
+
+class TagSingleListingRequest(BaseModel):
+    """Request model for tagging a single listing."""
+    event_id: str = Field(..., description="REQUIRED: CollectorInvestor Event ID (e.g., '4053663')")
+
+class TagSingleListingResponse(BaseModel):
+    """Response for tagging a single listing."""
+    success: bool
+    listing_id: int
+    title: str
+    tags_generated: int
+    tags_posted: bool
+    message: str

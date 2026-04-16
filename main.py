@@ -3,7 +3,7 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.models import PipelineRunRequest, PipelineRunResponse, PostTagsResponse, PostTagResult, FullEventPipelineRequest, FullEventPipelineResponse
+from src.models import PipelineRunRequest, PipelineRunResponse, PostTagsResponse, PostTagResult, FullEventPipelineRequest, FullEventPipelineResponse, TagSingleListingRequest, TagSingleListingResponse
 from src.services.collector_investor import fetch_products
 from src.services.tagger_service import generate_tags
 from src.services.search_service import search_products
@@ -433,4 +433,161 @@ async def run_full_event_pipeline(request: FullEventPipelineRequest) -> FullEven
         tags_posted_failed=tags_posted_failed,
         pages_processed=pages_processed,
         total_pages=pages_processed,
+    )
+
+@app.post("/listing/{listing_id}/tag")
+async def tag_single_listing(listing_id: int, request: TagSingleListingRequest) -> TagSingleListingResponse:
+    """
+    Generate and post tags for a specific listing using system ID.
+    
+    NOTE: System ID is automatically incremented by 1 to get the actual listing ID.
+    Example: system_id=111 → searches for listing_id=112
+    
+    Workflow:
+    1. Convert system_id → listing_id (add 1)
+    2. Try to fetch product from database, or fetch from Collector Investor API
+    3. Check if already tagged in this event
+    4. Generate tags
+    5. Post tags to Collector Investor API
+    6. Save to database
+    7. Record in tagging history
+    
+    Example:
+        curl -X POST http://localhost:8000/listing/111/tag \
+          -H "Content-Type: application/json" \
+          -d '{"event_id": "4053663"}'
+        # Will search for listing_id 112
+    """
+    if not request.event_id or not request.event_id.strip():
+        raise HTTPException(status_code=400, detail="event_id is required")
+    
+    event_id = request.event_id.strip()
+    
+    # Convert system_id to listing_id by adding 1
+    system_id = listing_id
+    listing_id = system_id + 1
+    
+    print(f"\n{'='*70}")
+    print(f"Tagging Listing {listing_id} (System ID: {system_id}) for event {event_id}")
+    print(f"{'='*70}")
+    
+    # Step 1: Try to fetch product from database first
+    from src.storage import get_product_by_id
+    
+    product = get_product_by_id(listing_id)
+    
+    # If not in database, fetch from Collector Investor API
+    if not product:
+        print(f"  → Not in database, fetching from Collector Investor API...")
+        try:
+            # Fetch all listings from the event and find the one with matching ID
+            offset = 0
+            found = False
+            max_offset = 50  # Search up to 50 pages (2500 items)
+            
+            while offset < max_offset and not found:
+                print(f"    → Searching page {offset + 1}...", flush=True)
+                page_products = fetch_products(
+                    offset=offset,
+                    limit=50,
+                    timeout=45,
+                    event_id=event_id
+                )
+                
+                print(f"    ✓ Page {offset + 1}: Found {len(page_products)} products")
+                
+                if not page_products:
+                    print(f"    ✓ End of results")
+                    break  # No more products
+                
+                # Search for listing with matching ID
+                for p in page_products:
+                    product_id = int(p.get("id", -1))
+                    if product_id == listing_id:
+                        product = p
+                        found = True
+                        print(f"    ✓ MATCH FOUND! Listing {listing_id} in page {offset + 1}")
+                        break
+                
+                if not found:
+                    offset += 1
+                    import time
+                    time.sleep(0.5)  # Small delay between pages
+            
+            if not product:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Listing {listing_id} not found in event {event_id} (searched {offset} pages)"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to fetch listing from API: {str(e)}"
+            )
+    
+    # Step 2: Check if already tagged
+    if should_skip_tagging(listing_id, event_id):
+        return TagSingleListingResponse(
+            success=False,
+            listing_id=listing_id,
+            title=product.get("title") or product.get("name"),
+            tags_generated=0,
+            tags_posted=False,
+            message=f"Already tagged in event {event_id}"
+        )
+    
+    # Step 3: Generate tags
+    try:
+        print(f"  → Generating tags for: {product.get('title', 'N/A')}")
+        tags = generate_tags(product)
+        product["tags"] = tags
+        
+        if not product.get("name") and product.get("title"):
+            product["name"] = product["title"]
+        
+        print(f"  ✓ Generated {len(tags)} tags")
+        
+    except Exception as e:
+        print(f"  ✗ Tag generation failed: {e}")
+        record_tagging(listing_id, event_id, 0, "failed", str(e))
+        raise HTTPException(status_code=500, detail=f"Tag generation failed: {e}")
+    
+    # Step 4: Save to database
+    try:
+        add_or_update_product(product)
+        print(f"  ✓ Saved to database")
+    except Exception as e:
+        print(f"  ✗ Failed to save: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save product: {e}")
+    
+    # Step 5: Post tags to API
+    post_success = False
+    try:
+        from src.services.CollectorInvestorTags import send_tags_for_product
+        print(f"  → Posting tags to API...")
+        post_result = send_tags_for_product(product)
+        
+        if post_result.get("success"):
+            post_success = True
+            print(f"  ✓ Posted successfully")
+        else:
+            print(f"  ✗ Post failed: {post_result.get('response')}")
+    except Exception as e:
+        print(f"  ✗ Post error: {e}")
+    
+    # Step 6: Record in tagging history
+    status = "posted" if post_success else "pending"
+    record_tagging(listing_id, event_id, len(tags), status)
+    
+    print(f"{'='*70}\n")
+    
+    return TagSingleListingResponse(
+        success=post_success,
+        listing_id=listing_id,
+        title=product.get("title") or product.get("name"),
+        tags_generated=len(tags),
+        tags_posted=post_success,
+        message="Tags generated and posted" if post_success else "Tags generated but posting failed"
     )

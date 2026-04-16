@@ -2,6 +2,7 @@
 
 import psycopg
 from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
 import json
 from typing import Optional
 from src.config import DATABASE_URL
@@ -63,13 +64,12 @@ def load_products() -> list[dict]:
     pool = get_connection_pool()
     
     with pool.connection() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(row_factory=dict_row)
         cursor.execute("SELECT * FROM products ORDER BY id DESC")
         rows = cursor.fetchall()
         
         products = []
-        for row in rows:
-            product = dict(row)
+        for product in rows:
             # Parse JSON fields
             product["tags"] = json.loads(product["tags"]) if product["tags"] else []
             product["image_urls"] = json.loads(product["image_urls"]) if product["image_urls"] else []
@@ -84,14 +84,13 @@ def get_product_by_id(product_id: int | str) -> Optional[dict]:
     pool = get_connection_pool()
     
     with pool.connection() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(row_factory=dict_row)
         cursor.execute("SELECT * FROM products WHERE id = %s", (int(product_id),))
-        row = cursor.fetchone()
+        product = cursor.fetchone()
         
-        if not row:
+        if not product:
             return None
         
-        product = dict(row)
         product["tags"] = json.loads(product["tags"]) if product["tags"] else []
         product["image_urls"] = json.loads(product["image_urls"]) if product["image_urls"] else []
         return product
@@ -199,7 +198,7 @@ def get_tagging_history(product_id: int = None, event_id: str = None) -> list[di
     pool = get_connection_pool()
     
     with pool.connection() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(row_factory=dict_row)
         
         if product_id and event_id:
             cursor.execute("""
@@ -213,5 +212,5 @@ def get_tagging_history(product_id: int = None, event_id: str = None) -> list[di
         else:
             cursor.execute("SELECT * FROM tagging_history ORDER BY tagged_at DESC")
         
-        records = [dict(row) for row in cursor.fetchall()]
-        return records
+        records = cursor.fetchall()
+        return records if records else []
