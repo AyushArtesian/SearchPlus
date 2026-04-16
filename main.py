@@ -8,7 +8,7 @@ from src.services.collector_investor import fetch_products
 from src.services.tagger_service import generate_tags
 from src.services.search_service import search_products
 from src.services.CollectorInvestorTags import send_all_tags
-from src.storage import load_products, add_or_update_product, get_product_count, should_skip_tagging, record_tagging
+from src.storage import load_products, add_or_update_product, get_product_count, should_skip_tagging, record_tagging, get_product_by_id, delete_tagging_history
 
 
 app = FastAPI(title="Sports Card Tagger", version="1.0.0")
@@ -272,6 +272,156 @@ def get_tagging_history_endpoint(product_id: int = None, event_id: str = None) -
     }
 
 
+@app.post("/event/{event_id}/cache-all")
+async def cache_all_listings(event_id: str) -> dict:
+    """
+    Pre-cache ALL listings from an event into the database for instant lookup.
+    
+    Run this once per event to populate the database. Then all single listing 
+    lookups via /listing/{id}/tag will be instant (O(1) from database).
+    
+    Example:
+        curl -X POST http://localhost:8000/event/4053663/cache-all
+    
+    Response includes total cached, which can then be instantly searched.
+    """
+    if not event_id or not event_id.strip():
+        raise HTTPException(status_code=400, detail="event_id is required")
+    
+    event_id = event_id.strip()
+    
+    print(f"\n{'='*70}")
+    print(f"Pre-caching all listings for event: {event_id}")
+    print(f"This will populate the database for instant lookups")
+    print(f"{'='*70}\n")
+    
+    import time
+    
+    total_cached = 0
+    offset = 0
+    page_num = 0
+    
+    while True:
+        page_num += 1
+        print(f"  📄 Page {page_num}: Fetching offset={offset}...", flush=True)
+        
+        try:
+            page_products = fetch_products(
+                offset=offset,
+                limit=50,
+                timeout=45,
+                event_id=event_id
+            )
+        except Exception as e:
+            print(f"  ✗ ERROR on page {page_num}: {str(e)[:100]}")
+            raise HTTPException(status_code=502, detail=str(e))
+        
+        if not page_products:
+            print(f"  ✓ End of results")
+            break
+        
+        print(f"  ✓ Got {len(page_products)} items, saving to database...")
+        
+        # Save all products from this page to database
+        # Only insert NEW listings - don't overwrite existing ones with tags
+        for product in page_products:
+            try:
+                product_id = int(product.get("id", -1))
+                
+                # Check if product already exists in database
+                existing = get_product_by_id(product_id)
+                
+                if existing:
+                    # Product already exists (likely has generated tags)
+                    # Skip it to preserve the tags
+                    print(f"    ⊘ Product {product_id} already cached (preserving tags)")
+                    continue
+                
+                # New product - add it
+                add_or_update_product(product)
+                total_cached += 1
+            except Exception as e:
+                print(f"    ✗ Failed to cache product {product.get('id')}: {str(e)[:50]}")
+        
+        offset += 1
+        print(f"  ✓ Cached {total_cached} products so far...")
+        time.sleep(0.5)  # Delay between pages
+    
+    print(f"\n{'='*70}")
+    print(f"✅ Cache Complete!")
+    print(f"  • Total cached: {total_cached}")
+    print(f"  • Pages fetched: {page_num}")
+    print(f"  • All listings now searchable instantly via database")
+    print(f"{'='*70}\n")
+    
+    return {
+        "success": True,
+        "event_id": event_id,
+        "total_cached": total_cached,
+        "pages_fetched": page_num,
+        "message": f"All {total_cached} listings cached. Single listing lookups will now be instant!"
+    }
+
+
+@app.delete("/listing/{listing_id}/delete-from-history")
+async def delete_listing_from_history(listing_id: int, event_id: str = None) -> dict:
+    """
+    Delete a listing directly from tagging history using the actual listing ID.
+    
+    Use this if you already know the exact listing_id from the database or tagging_history table.
+    This does NOT convert or modify the ID - it deletes exactly as provided.
+    
+    Parameters:
+        listing_id: Exact listing ID from database (no conversion)
+        event_id: Event ID (query parameter)
+    
+    Example:
+        curl -X DELETE "http://localhost:8000/listing/4490039/delete-from-history?event_id=4053663"
+    
+    Response:
+        {
+            "success": true,
+            "listing_id": 4490039,
+            "event_id": "4053663",
+            "message": "Removed from tagging history!"
+        }
+    """
+    if not event_id or not event_id.strip():
+        raise HTTPException(status_code=400, detail="event_id query parameter is required")
+    
+    event_id = event_id.strip()
+    
+    print(f"\n{'='*70}")
+    print(f"Deleting tagging history for Listing ID: {listing_id}")
+    print(f"Event: {event_id}")
+    print(f"{'='*70}")
+    
+    try:
+        # Delete from tagging history (direct listing_id, no conversion)
+        deleted = delete_tagging_history(listing_id, event_id)
+        
+        if deleted:
+            print(f"✓ Deleted! Listing can now be re-tagged")
+            return {
+                "success": True,
+                "listing_id": listing_id,
+                "event_id": event_id,
+                "message": "✓ Removed from tagging history. You can now re-tag this listing!"
+            }
+        else:
+            print(f"⚠ Not found in tagging history for listing_id={listing_id} and event_id={event_id}")
+            return {
+                "success": False,
+                "listing_id": listing_id,
+                "event_id": event_id,
+                "message": f"⚠ Listing {listing_id} was not in tagging history for event {event_id}"
+            }
+    
+    except Exception as e:
+        print(f"✗ Error deleting: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     from src.config import API_HOST, API_PORT, API_RELOAD
@@ -472,8 +622,6 @@ async def tag_single_listing(listing_id: int, request: TagSingleListingRequest) 
     print(f"{'='*70}")
     
     # Step 1: Try to fetch product from database first
-    from src.storage import get_product_by_id
-    
     product = get_product_by_id(listing_id)
     
     # If not in database, fetch from Collector Investor API

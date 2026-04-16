@@ -214,3 +214,20 @@ def get_tagging_history(product_id: int = None, event_id: str = None) -> list[di
         
         records = cursor.fetchall()
         return records if records else []
+
+
+def delete_tagging_history(product_id: int, event_id: str) -> bool:
+    """Delete a tagging history record to allow re-tagging."""
+    init_db()
+    pool = get_connection_pool()
+    
+    with pool.connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            DELETE FROM tagging_history 
+            WHERE product_id = %s AND event_id = %s
+        """, (int(product_id), event_id))
+        
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        return deleted
