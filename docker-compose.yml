@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: sports-card-tagger-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-CollectorInvestor}
+    volumes:
+      # Persist database data on host machine
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Only expose to localhost (not publicly accessible)
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tagger-network
+
+  # FastAPI Application
+  app:
+    build: .
+    container_name: sports-card-tagger-api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # PostgreSQL Connection
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_HOST: postgres  # Docker service name resolves to this
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-CollectorInvestor}
+      
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      
+      # Collector Investor API (optional)
+      CI_USERNAME: ${CI_USERNAME}
+      CI_BASE64_TOKEN: ${CI_BASE64_TOKEN}
+      
+      # API Configuration
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_RELOAD: false  # Disable in production
+    ports:
+      # Expose API to team (accessible externally)
+      - "8000:8000"
+    volumes:
+      # Optional: Mount local source for live updates (remove for production)
+      # - .:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - tagger-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  tagger-network:
+    driver: bridge

@@ -69,16 +69,17 @@ curl -X POST http://localhost:8000/pipeline/run-full-event \
 3. [Why This System](#-why-this-system)
 4. [Performance Benchmarks](#-performance-benchmarks)
 5. [Quick Start](#-quick-start)
-6. [API Endpoints](#-api-endpoints)
-7. [Workflows](#-workflows)
-8. [Installation & Setup](#-installation--setup)
-9. [Configuration](#-configuration)
-10. [Examples](#-examples)
-11. [Troubleshooting](#-troubleshooting)
-12. [Future Roadmap](#-future-roadmap)
-13. [Support & Community](#-support--community)
-14. [Contributing](#-contributing)
-15. [License](#-license)
+6. [Docker Deployment](#-docker-deployment)
+7. [API Endpoints](#-api-endpoints)
+8. [Workflows](#-workflows)
+9. [Installation & Setup](#-installation--setup)
+10. [Configuration](#-configuration)
+11. [Examples](#-examples)
+12. [Troubleshooting](#-troubleshooting)
+13. [Future Roadmap](#-future-roadmap)
+14. [Support & Community](#-support--community)
+15. [Contributing](#-contributing)
+16. [License](#-license)
 
 ---
 
@@ -169,7 +170,114 @@ curl "http://localhost:8000/search?q=patrick%20ewing"
 
 ---
 
-## 🚀 API Endpoints
+## � Docker Deployment
+
+**Recommended for production and team deployment**
+
+### Quick Docker Setup (5 minutes)
+
+```bash
+# 1. Clone repository
+git clone https://github.com/yourusername/sports-card-tagger.git
+cd sports-card-tagger
+
+# 2. Configure environment
+cp .env.example .env
+nano .env  # Edit with your credentials
+
+# 3. Build and start
+docker-compose build
+docker-compose up -d
+
+# 4. Verify
+curl http://localhost:8000
+docker-compose ps
+
+# 5. Access
+# API: http://localhost:8000
+# Docs: http://localhost:8000/docs
+```
+
+### Full Linux Server Setup
+
+For team deployment on Linux server, run automated setup:
+
+```bash
+# Download setup script
+wget https://raw.githubusercontent.com/yourusername/sports-card-tagger/main/setup-docker.sh
+
+# Run with sudo
+sudo bash setup-docker.sh
+
+# Follow prompts and your server will be ready in 2 minutes!
+```
+
+### Complete Documentation
+
+📚 **[See DOCKER-DEPLOYMENT.md](DOCKER-DEPLOYMENT.md)** for:
+- ✅ Step-by-step Linux server setup
+- ✅ Production configuration
+- ✅ SSL/HTTPS with Nginx
+- ✅ Backup and recovery procedures
+- ✅ Monitoring and troubleshooting
+- ✅ 24/7 uptime setup
+- ✅ Team access configuration
+
+### Cloud Testing with Render (Optional)
+
+For quick team testing **before** Linux deployment:
+
+📚 **[See RENDER-DEPLOYMENT.md](RENDER-DEPLOYMENT.md)** for:
+- ✅ Deploy to Render.com in 5 minutes
+- ✅ Test with team instantly
+- ✅ Share cloud endpoint
+- ✅ Validate workflows
+- ✅ Pricing info ($0-22/month)
+
+**Best for:** QA, feedback, validation before production
+
+### Docker Services Included
+
+```yaml
+services:
+  app:           # FastAPI application (port 8000)
+  postgres:      # PostgreSQL database (port 5432, internal only)
+  
+Features:
+  - ✅ Auto-restart on failure
+  - ✅ Health checks
+  - ✅ Log rotation
+  - ✅ Volume persistence
+  - ✅ Network isolation
+```
+
+### What Your Team Gets
+
+Once deployed on Linux server:
+
+```
+🌐 API Endpoint: http://<server-ip>:8000
+📚 Interactive Docs: http://<server-ip>:8000/docs
+🗄️  Database: PostgreSQL, 20 concurrent connections
+📊 Monitoring: Real-time logs and health checks
+🔒 Security: SSL/HTTPS ready, internal database access
+🚀 Uptime: 24/7 automatic restart on failure
+```
+
+### Team Usage
+
+Share with your team:
+
+📖 **[See TEAM-USAGE-GUIDE.md](TEAM-USAGE-GUIDE.md)** for:
+- ✅ API endpoint access
+- ✅ Code examples (Python, JavaScript, PowerShell)
+- ✅ Common workflows
+- ✅ Performance tips
+- ✅ Troubleshooting
+
+---
+
+## �🚀 API Endpoints
 
 ---
 
