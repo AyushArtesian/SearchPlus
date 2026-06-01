@@ -1,0 +1,67 @@
+services:
+  # PostgreSQL Database
+  - type: pserv
+    name: sports-card-db
+    env: python
+    ipAllowList: []
+    plan: standard
+    location: oregon
+    region: oregon
+    databaseName: sports_card_tagger
+    user: sports_card_user
+    plan: standard
+    postgresSQLVersion: "14"
+
+  # FastAPI Web Service
+  - type: web
+    name: sports-card-tagger-api
+    env: python
+    region: oregon
+    plan: standard
+    buildCommand: "pip install -r requirements.txt && python -c 'from src.storage import init_db; init_db()'"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /
+    numInstances: 1
+    
+    envVars:
+      # Database
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sports-card-db
+          property: connectionString
+
+      # CollectorInvestor API
+      - key: COLLECTOR_INVESTOR_USERNAME
+        sync: false
+      - key: COLLECTOR_INVESTOR_BASE64_TOKEN
+        sync: false
+
+      # Azure OpenAI
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_DEPLOYMENT
+        sync: false
+      - key: AZURE_OPENAI_API_KEY
+        sync: false
+
+      # Environment
+      - key: DB_HOST
+        fromDatabase:
+          name: sports-card-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: sports-card-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: sports-card-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: sports-card-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: sports-card-db
+          property: password
