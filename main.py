@@ -13,7 +13,7 @@ from src.services.collector_investor import fetch_products, fetch_listing_tags_b
 from src.services.tagger_service import generate_tags
 from src.services.search_service import search_products
 from src.services.CollectorInvestorTags import send_all_tags
-from src.storage import load_products, add_or_update_product, get_product_count, should_skip_tagging, record_tagging, get_product_by_id, delete_tagging_history
+from src.storage import load_products, add_or_update_product, get_product_count, should_skip_tagging, record_tagging, get_product_by_id, delete_tagging_history, init_db
 
 
 app = FastAPI(title="Sports Card Tagger", version="1.0.0")
@@ -27,11 +27,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database tables on app startup."""
+    try:
+        init_db()
+        print("✓ Database initialized successfully")
+    except Exception as e:
+        print(f"⚠ Database initialization warning: {e}")
+        print("  Database will be initialized on first API call")
+
 
 @app.get("/")
 def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "products_in_db": get_product_count()}
+    try:
+        init_db()  # Ensure database is initialized
+        return {"status": "ok", "products_in_db": get_product_count()}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "products_in_db": 0}
 
 
 @app.post("/pipeline/run")

@@ -1,7 +1,7 @@
-fastapi==0.95.2
-uvicorn[standard]==0.23.2
-httpx==0.23.3
-pydantic==1.10.12
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+httpx==0.26.0
+pydantic==2.6.0
 requests==2.31.0
 beautifulsoup4==4.12.2
 psycopg[binary]==3.3.3

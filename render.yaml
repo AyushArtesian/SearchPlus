@@ -19,7 +19,7 @@ services:
     region: oregon
     plan: standard
     buildCommand: "pip install --no-cache-dir -r requirements.txt"
-    startCommand: "python -c 'from src.storage import init_db; init_db()' && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /
     numInstances: 1
     
