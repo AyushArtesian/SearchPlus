@@ -7,3 +7,4 @@ beautifulsoup4
 psycopg[binary]
 psycopg-pool
 python-dotenv
+openai
