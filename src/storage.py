@@ -34,10 +34,29 @@ def init_db() -> None:
                 image_url TEXT,
                 image_urls TEXT,
                 tags TEXT,
+                suggested_tags TEXT,
+                suggested_titles TEXT,
+                suggested_descriptions TEXT,
                 name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+        
+        # Add missing columns if they don't exist
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS suggested_tags TEXT
+        """)
+        
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS suggested_titles TEXT
+        """)
+        
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS suggested_descriptions TEXT
         """)
         
         # Tagging history table (to prevent duplicate tagging)
@@ -72,6 +91,9 @@ def load_products() -> list[dict]:
         for product in rows:
             # Parse JSON fields
             product["tags"] = json.loads(product["tags"]) if product["tags"] else []
+            product["suggested_tags"] = json.loads(product["suggested_tags"]) if product["suggested_tags"] else []
+            product["suggested_titles"] = json.loads(product["suggested_titles"]) if product["suggested_titles"] else []
+            product["suggested_descriptions"] = json.loads(product["suggested_descriptions"]) if product["suggested_descriptions"] else []
             product["image_urls"] = json.loads(product["image_urls"]) if product["image_urls"] else []
             products.append(product)
         
@@ -106,18 +128,24 @@ def add_or_update_product(product: dict) -> None:
         
         product_id = product.get("id")
         tags_json = json.dumps(product.get("tags", []))
+        suggested_tags_json = json.dumps(product.get("suggested_tags", []))
+        suggested_titles_json = json.dumps(product.get("suggested_titles", []))
+        suggested_descriptions_json = json.dumps(product.get("suggested_descriptions", []))
         image_urls_json = json.dumps(product.get("image_urls", []))
         
         cursor.execute("""
             INSERT INTO products 
-            (id, title, description, image_url, image_urls, tags, name, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            (id, title, description, image_url, image_urls, tags, suggested_tags, suggested_titles, suggested_descriptions, name, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 title=EXCLUDED.title,
                 description=EXCLUDED.description,
                 image_url=EXCLUDED.image_url,
                 image_urls=EXCLUDED.image_urls,
                 tags=EXCLUDED.tags,
+                suggested_tags=EXCLUDED.suggested_tags,
+                suggested_titles=EXCLUDED.suggested_titles,
+                suggested_descriptions=EXCLUDED.suggested_descriptions,
                 name=EXCLUDED.name,
                 updated_at=CURRENT_TIMESTAMP
         """, (
@@ -127,6 +155,9 @@ def add_or_update_product(product: dict) -> None:
             product.get("image_url"),
             image_urls_json,
             tags_json,
+            suggested_tags_json,
+            suggested_titles_json,
+            suggested_descriptions_json,
             product.get("name")
         ))
         

@@ -403,7 +403,7 @@ def fetch_verification_tags(skip: int = 0, take: int = 50, timeout: int = 45) ->
     }
 
 
-def fetch_listing_tags_by_id(listing_id: int, event_id: str, timeout: int = 45) -> dict:
+def fetch_listing_tags_by_id(listing_id: int, event_id: str = None, timeout: int = 45) -> dict:
     """
     Fetch tags for a SPECIFIC listing by searching through paginated results.
     

@@ -10,7 +10,7 @@ from src.models import (
     VerifyListingTagsResponse
 )
 from src.services.collector_investor import fetch_products, fetch_listing_tags_by_id
-from src.services.tagger_service import generate_tags
+from src.services.tagger_service import generate_tags, generate_suggestions
 from src.services.search_service import search_products
 from src.services.CollectorInvestorTags import send_all_tags
 from src.storage import load_products, add_or_update_product, get_product_count, should_skip_tagging, record_tagging, get_product_by_id, delete_tagging_history, init_db
@@ -442,22 +442,21 @@ async def delete_listing_from_history(listing_id: int, event_id: str = None) -> 
         raise HTTPException(status_code=500, detail=f"Failed to delete: {str(e)}")
 
 
-@app.get("/verify/tags/{listing_id}/{event_id}")
-async def verify_listing_tags(listing_id: int, event_id: str, system_id: bool = Query(False, description="If true, convert listing_id from system_id by adding 1")) -> VerifyListingTagsResponse:
+@app.get("/verify/tags/{listing_id}")
+async def verify_listing_tags(listing_id: int, system_id: bool = Query(False, description="If true, convert listing_id from system_id by adding 1")) -> VerifyListingTagsResponse:
     """
-    Verify tags for a SPECIFIC listing by listing_id and event_id.
+    Verify tags for a SPECIFIC listing by listing_id.
     
     This endpoint searches through the production database to find the listing
     and return its tags. Perfect for spot-checking after tagging.
     
     IMPORTANT: The verification API uses ListingId (which is system_id + 1).
     If you have system_id from tagging, either:
-      1. Add 1 manually: /verify/tags/{system_id + 1}/{event_id}
-      2. Use system_id=true parameter: /verify/tags/{system_id}/{event_id}?system_id=true
+      1. Add 1 manually: /verify/tags/{system_id + 1}
+      2. Use system_id=true parameter: /verify/tags/{system_id}?system_id=true
     
     Parameters:
         listing_id: The listing ID to verify (or system_id if system_id=true)
-        event_id: The event ID (for context)
         system_id: If true, convert system_id to listing_id by adding 1 (default: false)
     
     Returns:
@@ -465,16 +464,16 @@ async def verify_listing_tags(listing_id: int, event_id: str, system_id: bool = 
     
     Examples:
         # Using listing_id directly (system_id + 1)
-        curl http://localhost:8000/verify/tags/4440024/4053663
+        curl http://localhost:8000/verify/tags/4440024
         
         # Using system_id with auto-conversion
-        curl "http://localhost:8000/verify/tags/4440023/4053663?system_id=true"
+        curl "http://localhost:8000/verify/tags/4440023?system_id=true"
         
     Success Response:
         {
             "success": true,
             "listing_id": 4440024,
-            "event_id": "4053663",
+            "event_id": null,
             "title": null,
             "tags": ["pete rose", "1963", "topps", "rookie card", ...],
             "has_tags": true,
@@ -483,19 +482,14 @@ async def verify_listing_tags(listing_id: int, event_id: str, system_id: bool = 
             "message": "✓ Found 47 tags for listing 4440024 (searched 1 page)"
         }
     """
-    if not event_id or not event_id.strip():
-        raise HTTPException(status_code=400, detail="event_id is required")
-    
     if listing_id <= 0:
         raise HTTPException(status_code=400, detail="listing_id must be a positive integer")
     
     # Convert system_id to listing_id if requested
     actual_listing_id = listing_id + 1 if system_id else listing_id
     
-    event_id = event_id.strip()
-    
     try:
-        result = fetch_listing_tags_by_id(listing_id=actual_listing_id, event_id=event_id)
+        result = fetch_listing_tags_by_id(listing_id=actual_listing_id)
         
         if result.get("success"):
             tags = result.get("tags", [])
@@ -503,7 +497,6 @@ async def verify_listing_tags(listing_id: int, event_id: str, system_id: bool = 
             return VerifyListingTagsResponse(
                 success=True,
                 listing_id=actual_listing_id,
-                event_id=event_id,
                 title=None,
                 tags=tags,
                 has_tags=len(tags) > 0,
@@ -515,7 +508,6 @@ async def verify_listing_tags(listing_id: int, event_id: str, system_id: bool = 
             return VerifyListingTagsResponse(
                 success=False,
                 listing_id=actual_listing_id,
-                event_id=event_id,
                 title=None,
                 tags=[],
                 has_tags=False,
@@ -789,24 +781,32 @@ async def tag_single_listing(listing_id: int, request: TagSingleListingRequest) 
             title=product.get("title") or product.get("name"),
             tags_generated=0,
             tags_posted=False,
-            message=f"Already tagged in event {event_id}"
+            message=f"Already tagged in event {event_id}",
+            suggested_tags=[],
+            suggested_titles=[],
+            suggested_descriptions=[]
         )
     
-    # Step 3: Generate tags
+    # Step 3: Generate tags, titles, and descriptions
     try:
-        print(f"  → Generating tags for: {product.get('title', 'N/A')}")
-        tags = generate_tags(product)
-        product["tags"] = tags
+        print(f"  → Generating suggestions for: {product.get('title', 'N/A')}")
+        suggestions = generate_suggestions(product)
+        product["suggested_tags"] = suggestions.get("suggested_tags", [])
+        product["suggested_titles"] = suggestions.get("suggested_titles", [])
+        product["suggested_descriptions"] = suggestions.get("suggested_descriptions", [])
+        
+        # Keep backward compatibility: store tags in both fields
+        product["tags"] = product["suggested_tags"]
         
         if not product.get("name") and product.get("title"):
             product["name"] = product["title"]
         
-        print(f"  ✓ Generated {len(tags)} tags")
+        print(f"  ✓ Generated {len(product['suggested_tags'])} tags, {len(product['suggested_titles'])} titles, {len(product['suggested_descriptions'])} descriptions")
         
     except Exception as e:
-        print(f"  ✗ Tag generation failed: {e}")
+        print(f"  ✗ Suggestion generation failed: {e}")
         record_tagging(listing_id, event_id, 0, "failed", str(e))
-        raise HTTPException(status_code=500, detail=f"Tag generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Suggestion generation failed: {e}")
     
     # Step 4: Save to database
     try:
@@ -816,24 +816,30 @@ async def tag_single_listing(listing_id: int, request: TagSingleListingRequest) 
         print(f"  ✗ Failed to save: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save product: {e}")
     
-    # Step 5: Post tags to API
+    # Step 5: Post tags to API (only if post_to_cia is True)
     post_success = False
-    try:
-        from src.services.CollectorInvestorTags import send_tags_for_product
-        print(f"  → Posting tags to API...")
-        post_result = send_tags_for_product(product)
-        
-        if post_result.get("success"):
-            post_success = True
-            print(f"  ✓ Posted successfully")
-        else:
-            print(f"  ✗ Post failed: {post_result.get('response')}")
-    except Exception as e:
-        print(f"  ✗ Post error: {e}")
+    post_to_cia = request.post_to_cia
+    
+    if post_to_cia:
+        try:
+            from src.services.CollectorInvestorTags import send_tags_for_product
+            print(f"  → Posting tags to Collector Investor DB...")
+            # Use tags from suggestions for posting
+            post_result = send_tags_for_product(product)
+            
+            if post_result.get("success"):
+                post_success = True
+                print(f"  ✓ Posted successfully to CIA DB")
+            else:
+                print(f"  ✗ Post to CIA DB failed: {post_result.get('response')}")
+        except Exception as e:
+            print(f"  ✗ Post to CIA DB error: {e}")
+    else:
+        print(f"  → Skipping CIA DB post (post_to_cia=False)")
     
     # Step 6: Record in tagging history
     status = "posted" if post_success else "pending"
-    record_tagging(listing_id, event_id, len(tags), status)
+    record_tagging(listing_id, event_id, len(product["suggested_tags"]), status)
     
     print(f"{'='*70}\n")
     
@@ -841,7 +847,134 @@ async def tag_single_listing(listing_id: int, request: TagSingleListingRequest) 
         success=post_success,
         listing_id=listing_id,
         title=product.get("title") or product.get("name"),
-        tags_generated=len(tags),
+        tags_generated=len(product.get("suggested_tags", [])),
         tags_posted=post_success,
-        message="Tags generated and posted" if post_success else "Tags generated but posting failed"
+        message="Tags generated and saved" if not post_to_cia else ("Tags generated and posted to CIA" if post_success else "Tags generated but posting to CIA failed"),
+        suggested_tags=product.get("suggested_tags", []),
+        suggested_titles=product.get("suggested_titles", []),
+        suggested_descriptions=product.get("suggested_descriptions", [])
+    )
+
+
+from pydantic import BaseModel
+
+
+class PostToCIAResponse(BaseModel):
+    success: bool
+    listing_id: int
+    tags_posted: bool
+    tags_count: int
+    message: str
+
+
+@app.post("/listing/{listing_id}/post-to-cia")
+async def post_existing_tags_to_cia(
+    listing_id: int
+) -> PostToCIAResponse:
+    """
+    Post previously generated tags to Collector Investor DB.
+
+    Only requires the system ID.
+
+    Example:
+        System ID: 5201869
+        Actual Listing ID: 5201870
+
+        POST /listing/5201869/post-to-cia
+    """
+
+    import json
+
+    # Convert system_id -> listing_id
+    system_id = listing_id
+    listing_id = system_id + 1
+
+    print(f"\n{'='*70}")
+    print(
+        f"Posting existing tags for Listing {listing_id} "
+        f"(System ID: {system_id}) to CIA"
+    )
+    print(f"{'='*70}")
+
+    # Fetch product from database
+    product = get_product_by_id(listing_id)
+
+    if not product:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Listing {listing_id} not found in database. "
+                f"Please generate tags first."
+            )
+        )
+
+    print(f"  ✓ Found product: {product.get('title', 'N/A')}")
+
+    # Get tags
+    suggested_tags = product.get("suggested_tags", [])
+
+    if not suggested_tags:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No tags found for listing {listing_id}. "
+                f"Please generate tags first."
+            )
+        )
+
+    # Convert JSON string -> list
+    if isinstance(suggested_tags, str):
+        try:
+            suggested_tags = json.loads(suggested_tags)
+        except Exception:
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid suggested_tags format in database"
+            )
+
+    print(f"  ✓ Found {len(suggested_tags)} tags to post")
+
+    # Ensure tags field exists for CIA API
+    product["tags"] = suggested_tags
+
+    # Post to CIA
+    try:
+        from src.services.CollectorInvestorTags import send_tags_for_product
+
+        print("  → Posting tags to Collector Investor DB...")
+
+        post_result = send_tags_for_product(product)
+
+        if not post_result.get("success"):
+            print(
+                f"  ✗ Post failed: "
+                f"{post_result.get('response')}"
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to post tags: {post_result.get('response')}"
+            )
+
+        print("  ✓ Posted successfully to CIA DB")
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        print(f"  ✗ Post error: {e}")
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to post tags to CIA: {str(e)}"
+        )
+
+    print(f"{'='*70}\n")
+
+    return PostToCIAResponse(
+        success=True,
+        listing_id=listing_id,
+        tags_posted=True,
+        tags_count=len(suggested_tags),
+        message="Tags successfully posted to CIA DB"
     )

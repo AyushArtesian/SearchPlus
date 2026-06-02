@@ -837,3 +837,127 @@ def generate_tags(
                 return []
         print(f"    [{product_id}] Error: {e}")
         return []
+
+
+def generate_suggestions(
+    product: dict[str, Any],
+    store_base_url: str = "",
+    *,
+    client: OpenAI | None = None,
+    deployment: str | None = None,
+) -> dict[str, Any]:
+    """
+    Generate tags, titles, and descriptions for a product.
+    Returns a dict with suggested_tags, suggested_titles, and suggested_descriptions.
+    """
+    deployment_name = (
+        deployment
+        or os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
+        or AZURE_OPENAI_DEPLOYMENT
+    ).strip()
+    if not deployment_name:
+        print("    Error: Missing AZURE_OPENAI_DEPLOYMENT")
+        return {
+            "suggested_tags": [],
+            "suggested_titles": [],
+            "suggested_descriptions": []
+        }
+
+    openai_client = client
+    if openai_client is None:
+        endpoint = (os.getenv("AZURE_OPENAI_ENDPOINT", "") or AZURE_OPENAI_ENDPOINT).strip()
+        api_key   = (os.getenv("AZURE_OPENAI_API_KEY", "")  or AZURE_OPENAI_API_KEY).strip()
+        if not endpoint or not api_key:
+            print("    Error: Missing Azure OpenAI endpoint or API key")
+            return {
+                "suggested_tags": [],
+                "suggested_titles": [],
+                "suggested_descriptions": []
+            }
+        if not endpoint.endswith("/"):
+            endpoint += "/"
+        openai_client = OpenAI(api_key=api_key, base_url=endpoint)
+
+    product_id  = product.get("id", "")
+    title       = _clean_text(product.get("title") or product.get("name"))
+    subtitle    = _clean_text(product.get("subtitle"))
+    description = _clean_text(product.get("description"))
+    category    = product.get("category") or {}
+    image_urls  = _extract_all_image_urls(product, store_base_url)
+
+    print(f"    [{product_id}] Generating suggestions...")
+
+    # Generate tags
+    print(f"    [{product_id}] Generating tags...")
+    tags = generate_tags(product, store_base_url, client=openai_client, deployment=deployment_name)
+
+    # Generate suggested titles
+    print(f"    [{product_id}] Generating suggested titles...")
+    suggested_titles: list[str] = []
+    try:
+        title_prompt = f"""You are a sports card title optimization expert. Generate 5 alternative, SEO-optimized titles for this product that would help collectors find it through search.
+
+Original title: {title}
+Subtitle: {subtitle or '(none)'}
+Category: {category.get('sport', '')} {category.get('era', '')} card
+
+Generate ONLY 5 unique, buyer-friendly titles. Each title should be:
+- 5-15 words
+- Include key details: player name, year, brand, condition if known
+- Use collector terminology
+
+Return ONLY a JSON array of strings, no explanation:
+["title 1", "title 2", "title 3", "title 4", "title 5"]"""
+
+        response = openai_client.chat.completions.create(
+            model=deployment_name,
+            messages=[{"role": "user", "content": title_prompt}],
+            temperature=0.7,
+            max_completion_tokens=300,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        suggested_titles = _normalize_tags(_parse_json_list(raw))
+        print(f"    [{product_id}] ✓ Generated {len(suggested_titles)} suggested titles")
+    except Exception as e:
+        print(f"    [{product_id}] Title generation failed: {e}")
+        suggested_titles = []
+
+    # Generate suggested descriptions
+    print(f"    [{product_id}] Generating suggested descriptions...")
+    suggested_descriptions: list[str] = []
+    try:
+        desc_prompt = f"""You are a sports card listing expert. Generate 3 compelling, detailed product descriptions that highlight key selling points and appeal to collectors.
+
+Original title: {title}
+Original description: {description or '(none)'}
+Subtitle: {subtitle or '(none)'}
+Tags: {', '.join(tags[:10])}
+
+Generate 3 unique product descriptions, each 50-100 words. Each should:
+- Highlight condition and rarity
+- Mention key features (rookie, autograph, patch, parallel, etc.) if applicable
+- Use collector-friendly language
+- Focus on value proposition
+
+Return ONLY a JSON array of strings, no explanation:
+["description 1", "description 2", "description 3"]"""
+
+        response = openai_client.chat.completions.create(
+            model=deployment_name,
+            messages=[{"role": "user", "content": desc_prompt}],
+            temperature=0.7,
+            max_completion_tokens=500,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        raw_descs = _parse_json_list(raw)
+        suggested_descriptions = [desc for desc in raw_descs if len(desc) > 20][:3]
+        print(f"    [{product_id}] ✓ Generated {len(suggested_descriptions)} suggested descriptions")
+    except Exception as e:
+        print(f"    [{product_id}] Description generation failed: {e}")
+        suggested_descriptions = []
+
+    return {
+        "suggested_tags": tags,
+        "suggested_titles": suggested_titles,
+        "suggested_descriptions": suggested_descriptions
+    }

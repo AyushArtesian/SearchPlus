@@ -87,6 +87,7 @@ class FullEventPipelineResponse(BaseModel):
 class TagSingleListingRequest(BaseModel):
     """Request model for tagging a single listing."""
     event_id: str = Field(..., description="REQUIRED: CollectorInvestor Event ID (e.g., '4053663')")
+    post_to_cia: bool = Field(True, description="If true, post generated tags to Collector Investor DB; if false, only save to local database (default: true)")
 
 class TagSingleListingResponse(BaseModel):
     """Response for tagging a single listing."""
@@ -96,6 +97,9 @@ class TagSingleListingResponse(BaseModel):
     tags_generated: int
     tags_posted: bool
     message: str
+    suggested_tags: list[str] = Field(default_factory=list, description="Generated tags from AI")
+    suggested_titles: list[str] = Field(default_factory=list, description="Suggested titles from AI")
+    suggested_descriptions: list[str] = Field(default_factory=list, description="Suggested descriptions from AI")
 
 
 class VerificationTagItem(BaseModel):
@@ -130,7 +134,7 @@ class VerifyListingTagsResponse(BaseModel):
     """Response for verifying tags of a specific listing."""
     success: bool
     listing_id: int
-    event_id: str
+    event_id: Optional[str] = None
     title: Optional[str] = None
     tags: list[str] = Field(default_factory=list, description="Tags posted to production for this listing")
     has_tags: bool = Field(False, description="Whether this listing has tags")
